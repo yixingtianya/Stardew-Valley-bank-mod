@@ -1,0 +1,16 @@
+{
+  "Name": "Dynamic Financial System (Refactored)",
+  "Author": "BankMod",
+  "Version": "2.0.0",
+  "Description": "动态金融公司系统 — 架构重构版：接口驱动、分层架构、可扩展",
+  "UniqueID": "bankmod.dynamicfinancialsystem.refactored",
+  "EntryDll": "BankModRefactored.dll",
+  "MinimumApiVersion": "4.0.0",
+  "UpdateKeys": [],
+  "Dependencies": [
+    {
+      "UniqueID": "spacechase0.GenericModConfigMenu",
+      "IsRequired": false
+    }
+  ]
+}

@@ -1,0 +1,207 @@
+namespace BankMod.Data;
+
+/// <summary>Mod configuration read from config.json — all parameters aligned with value.txt V1.0.</summary>
+public class ModConfig
+{
+    /*********
+    ** 固定公司
+    *********/
+    public List<CompanyDefinition> Companies { get; set; } = new()
+    {
+        new()
+        {
+            Name = "Joja超市",
+            DepositInterestRate = 0.025,
+            DepositLimit = 2000000,
+            LoanInterestRate = 0.04,
+            LoanLimit = 300000,
+            SunBonus = 0.0001,
+            RainBonus = -0.0001,
+            SnowBonus = 0.0001,
+            LightningBonus = 0.0
+        },
+        new()
+        {
+            Name = "皮埃尔的杂货店",
+            DepositInterestRate = 0.015,
+            DepositLimit = 1000000,
+            LoanInterestRate = 0.025,
+            LoanLimit = 200000,
+            SunBonus = 0.0,
+            RainBonus = 0.0002,
+            SnowBonus = -0.0001,
+            LightningBonus = -0.0005
+        }
+    };
+
+    /*********
+    ** 利率计算选项
+    *********/
+    public bool UseCompoundInterest { get; set; } = false;
+    public bool AllowNegativeInterest { get; set; } = false;
+    public double DepositRateFloor { get; set; } = -0.02;
+
+    /*********
+    ** 运气影响
+    *********/
+    public bool EnableLuckInfluence { get; set; } = true;
+    public double LuckStrengthCoefficient { get; set; } = 2.5;
+
+    /*********
+    ** 天气影响
+    *********/
+    public bool EnableWeatherInfluence { get; set; } = true;
+
+    /*********
+    ** 动态公司
+    *********/
+    public int CompanySpawnRequiredSellCount { get; set; } = 50;
+    public int CompanySellTrackingWindowDays { get; set; } = 7;
+    public double LoanRateHardCap { get; set; } = 0.15;
+    public int DepositLoanCoefficient { get; set; } = 1000;
+
+    /*********
+    ** 连续售卖加成
+    *********/
+    public double ConsecutiveSellDepositBonusPerDay { get; set; } = 0.005;
+    public double ConsecutiveSellDepositBonusCap { get; set; } = 0.05;
+    public double ConsecutiveSellLoanBonusPerDay { get; set; } = 0.01;
+    public double ConsecutiveSellLoanBonusCap { get; set; } = 0.10;
+    public double SellDecayDepositPerDay { get; set; } = 0.005;
+    public double SellDecayLoanPerDay { get; set; } = 0.01;
+
+    /*********
+    ** 竞争打压
+    *********/
+    public double SuppressMaxDropPerDay { get; set; } = -0.02;
+    public int SuppressEffectDurationDays { get; set; } = 5;
+    public int SuppressMaxStacks { get; set; } = 3;
+
+    /*********
+    ** 贷款与还款
+    *********/
+    public double LongTermRateDiscount { get; set; } = 0.005;
+    public int PrincipalDebtGraceDays { get; set; } = 1;
+    public double PenaltyInterestRate { get; set; } = 0.20;
+
+    /*********
+    ** 破产与欠债
+    *********/
+    public double BankruptcyIncomeDeduction { get; set; } = 0.50;
+
+    /*********
+    ** 债券交易
+    *********/
+    public int BankruptcyNoTradeDays { get; set; } = 14;
+    public int BankruptcyRateNegativeDays { get; set; } = 5;
+    public int BankruptcyDepositThreshold { get; set; } = 5000;
+    public int PreBankruptcyGraceDays { get; set; } = 3;
+    public double DebtTransferRateDiscount { get; set; } = 0.50;
+    public int DebtTransferNewRepaymentDays { get; set; } = 28;
+
+    /*********
+    ** 借款上限
+    *********/
+    public double BorrowingLeverageCoefficient { get; set; } = 2.0;
+    public int BorrowingHardCap { get; set; } = 500000;
+    public double FixedCompanyQuotaRatio { get; set; } = 0.60;
+
+    /*********
+    ** 多人模式
+    *********/
+    public string TransferFeeMode { get; set; } = "percentage";
+    public double TransferFeeValue { get; set; } = 0.01;
+
+    /*********
+    ** 显示设置
+    *********/
+    public int RateDisplayPrecision { get; set; } = 2;
+    public bool ShowRateChangeNotification { get; set; } = true;
+    public bool ShowMorningInterestNotification { get; set; } = true;
+    public bool ShowCompanyDangerWarning { get; set; } = true;
+
+    /// <summary>Deep-clone the config for snapshot/backup purposes.</summary>
+    public ModConfig Clone()
+    {
+        return new ModConfig
+        {
+            Companies = Companies.Select(c => c.Clone()).ToList(),
+            UseCompoundInterest = UseCompoundInterest,
+            AllowNegativeInterest = AllowNegativeInterest,
+            DepositRateFloor = DepositRateFloor,
+            EnableLuckInfluence = EnableLuckInfluence,
+            LuckStrengthCoefficient = LuckStrengthCoefficient,
+            EnableWeatherInfluence = EnableWeatherInfluence,
+            CompanySpawnRequiredSellCount = CompanySpawnRequiredSellCount,
+            CompanySellTrackingWindowDays = CompanySellTrackingWindowDays,
+            LoanRateHardCap = LoanRateHardCap,
+            DepositLoanCoefficient = DepositLoanCoefficient,
+            ConsecutiveSellDepositBonusPerDay = ConsecutiveSellDepositBonusPerDay,
+            ConsecutiveSellDepositBonusCap = ConsecutiveSellDepositBonusCap,
+            ConsecutiveSellLoanBonusPerDay = ConsecutiveSellLoanBonusPerDay,
+            ConsecutiveSellLoanBonusCap = ConsecutiveSellLoanBonusCap,
+            SellDecayDepositPerDay = SellDecayDepositPerDay,
+            SellDecayLoanPerDay = SellDecayLoanPerDay,
+            SuppressMaxDropPerDay = SuppressMaxDropPerDay,
+            SuppressEffectDurationDays = SuppressEffectDurationDays,
+            SuppressMaxStacks = SuppressMaxStacks,
+            LongTermRateDiscount = LongTermRateDiscount,
+            PrincipalDebtGraceDays = PrincipalDebtGraceDays,
+            PenaltyInterestRate = PenaltyInterestRate,
+            BankruptcyIncomeDeduction = BankruptcyIncomeDeduction,
+            BankruptcyNoTradeDays = BankruptcyNoTradeDays,
+            BankruptcyRateNegativeDays = BankruptcyRateNegativeDays,
+            BankruptcyDepositThreshold = BankruptcyDepositThreshold,
+            PreBankruptcyGraceDays = PreBankruptcyGraceDays,
+            DebtTransferRateDiscount = DebtTransferRateDiscount,
+            DebtTransferNewRepaymentDays = DebtTransferNewRepaymentDays,
+            BorrowingLeverageCoefficient = BorrowingLeverageCoefficient,
+            BorrowingHardCap = BorrowingHardCap,
+            FixedCompanyQuotaRatio = FixedCompanyQuotaRatio,
+            TransferFeeMode = TransferFeeMode,
+            TransferFeeValue = TransferFeeValue,
+            RateDisplayPrecision = RateDisplayPrecision,
+            ShowRateChangeNotification = ShowRateChangeNotification,
+            ShowMorningInterestNotification = ShowMorningInterestNotification,
+            ShowCompanyDangerWarning = ShowCompanyDangerWarning
+        };
+    }
+}
+
+/// <summary>Definition of a bank company with interest rates, limits, and per-company weather effects.</summary>
+public class CompanyDefinition
+{
+    public string Name { get; set; } = "";
+    public double DepositInterestRate { get; set; }
+    public double LoanInterestRate { get; set; }
+    public int DepositLimit { get; set; }
+    public int LoanLimit { get; set; }
+    public double RainBonus { get; set; }
+    public double SunBonus { get; set; }
+    public double SnowBonus { get; set; }
+    public double LightningBonus { get; set; }
+
+    /// <summary>Crop code for CropDataProvider lookup (e.g. "Potato"). Null for fixed companies.</summary>
+    public string? CropCode { get; set; }
+
+    /// <summary>Whether this is a dynamically generated company.</summary>
+    public bool IsDynamic { get; set; }
+
+    public CompanyDefinition Clone()
+    {
+        return new CompanyDefinition
+        {
+            Name = Name,
+            DepositInterestRate = DepositInterestRate,
+            LoanInterestRate = LoanInterestRate,
+            DepositLimit = DepositLimit,
+            LoanLimit = LoanLimit,
+            RainBonus = RainBonus,
+            SunBonus = SunBonus,
+            SnowBonus = SnowBonus,
+            LightningBonus = LightningBonus,
+            CropCode = CropCode,
+            IsDynamic = IsDynamic
+        };
+    }
+}

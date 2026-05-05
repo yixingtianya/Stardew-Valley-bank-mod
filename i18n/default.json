@@ -1,0 +1,55 @@
+{
+  "mod.loaded": "动态金融公司系统 v{0} 加载成功！| Dynamic Financial System v{0} loaded successfully!",
+
+  "command.spawn_phone.desc": "向背包中刷入一部手机。| Spawn a phone into your inventory.",
+  "command.spawn_phone.success": "手机已放入背包。| Phone added to inventory.",
+  "command.error.no_world": "请先加载存档。| Please load a save first.",
+  "command.error.inventory_full": "背包已满！| Inventory is full!",
+
+  "phone.object_data": "Phone/-300/-300/Basic/0/Phone/A portable banking device for the Dynamic Financial System./true",
+
+  "phone.dialogue.welcome": "欢迎使用动态金融公司系统！| Welcome to the Dynamic Financial System!",
+  "phone.dialogue.choice": "请选择操作：| What would you like to do?",
+  "phone.choice.enter": "进入银行|Enter Bank",
+  "phone.choice.later": "稍后再说|Maybe Later",
+
+  "log.question_answered": "Player answered the bank entry question (UI coming in step 1.5)",
+  "chat.enter_bank": "[BankMod] 进入银行 (UI开发中...)",
+  "chat.mail_sent": "[BankMod] 您有一封新邮件！",
+  "chat.phone_received": "[BankMod] 您获得了一部手机！",
+
+  "mail.welcome": "@银行系统^亲爱的客户：^ ^欢迎使用动态金融公司服务！^ ^您收到了一部专属手机，使用它可以：^^- 查询账户余额^^- 办理存取款业务^^- 联系客服支持^ ^请妥善保管您的手机。^ ^动态金融公司 敬上^",
+
+  "phone.name": "手机|Phone",
+  "phone.description": "一个神奇的手机，可以联系银行和其他服务。|A magical phone that connects you to the bank and other services.",
+  "phone.category": "手机|Phone",
+
+  "config.enable_compound_interest.name": "启用复利选项",
+  "config.enable_compound_interest.tooltip": "在银行界面显示复利计算选项。复利=本金+已获利息都计入下次计息。| Show compound interest option in bank UI. Compound = base + earned interest all earn interest.",
+  "config.enable_simple_interest.name": "启用单利选项",
+  "config.enable_simple_interest.tooltip": "在银行界面显示单利计算选项。单利=只有原始本金计入计息。| Show simple interest option in bank UI. Simple = only original base amount earns interest.",
+  "config.enable_negative_interest.name": "启用负利率选项",
+  "config.enable_negative_interest.tooltip": "允许利率为负值，导致存款可能亏损。| Allow interest rate to be negative, which may cause losses on deposits.",
+  "config.current_interest_type.name": "当前利率类型",
+  "config.current_interest_type.tooltip": "显示当前使用的利率计算方式",
+  "config.interest_type_hint": "提示：在银行界面点击切换按钮可更改利率类型",
+  "config.interest_type.compound": "复利",
+  "config.interest_type.simple": "单利",
+
+  "config.enable_luck_influence.name": "启用运气影响",
+  "config.enable_luck_influence.tooltip": "每日运气值（Daily Luck）影响存款利率。| Daily Luck affects deposit interest rate.",
+  "config.luck_multiplier.name": "运气影响倍数",
+  "config.luck_multiplier.tooltip": "运气值 × 此倍数 = 利率变化。设置越大，运气影响越明显。| Luck value × this = rate change. Higher = more effect.",
+
+  "config.weather_section": "天气影响设置",
+  "config.enable_weather_influence.name": "启用天气影响",
+  "config.enable_weather_influence.tooltip": "根据当天天气调整存款利率。| Adjust deposit interest rate based on today's weather.",
+  "config.sun_bonus.name": "晴天加成",
+  "config.sun_bonus.tooltip": "晴天时的利率额外加成（可以是负值）。| Extra rate bonus on sunny days (can be negative).",
+  "config.rain_bonus.name": "雨天加成",
+  "config.rain_bonus.tooltip": "雨天时的利率额外加成（可以是负值）。| Extra rate bonus on rainy days (can be negative).",
+  "config.snow_bonus.name": "雪天加成",
+  "config.snow_bonus.tooltip": "雪天时的利率额外加成（可以是负值）。| Extra rate bonus on snowy days (can be negative).",
+  "config.lightning_bonus.name": "雷暴加成",
+  "config.lightning_bonus.tooltip": "雷暴时的利率额外加成（可以是负值）。| Extra rate bonus on thunderstorm days (can be negative)."
+}

@@ -1,0 +1,8 @@
+f:\agency-agents-main\Stardew Valley bank mod refactored\obj\Release\net6.0\BankMod.csproj.AssemblyReference.cache
+f:\agency-agents-main\Stardew Valley bank mod refactored\obj\Release\net6.0\BankMod.GeneratedMSBuildEditorConfig.editorconfig
+f:\agency-agents-main\Stardew Valley bank mod refactored\obj\Release\net6.0\BankMod.AssemblyInfoInputs.cache
+f:\agency-agents-main\Stardew Valley bank mod refactored\obj\Release\net6.0\BankMod.AssemblyInfo.cs
+f:\agency-agents-main\Stardew Valley bank mod refactored\obj\Release\net6.0\BankMod.csproj.CoreCompileInputs.cache
+f:\agency-agents-main\Stardew Valley bank mod refactored\bin\Release\net6.0\BankModRefactored.deps.json
+f:\agency-agents-main\Stardew Valley bank mod refactored\bin\Release\net6.0\BankModRefactored.dll
+f:\agency-agents-main\Stardew Valley bank mod refactored\obj\Release\net6.0\BankModRefactored.dll
