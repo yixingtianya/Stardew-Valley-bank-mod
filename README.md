@@ -89,9 +89,7 @@ BankMod/
 │   ├── BankMenu.cs              # 手机银行主界面
 │   └── JojaSupplyMenu.cs        # Joja 供应商界面
 ├── BankMod.cs           # 模组入口
-├── manifest.json
-├── Morrio event.txt     # Morris 事件（Content Patcher 格式备档）
-└── Crops values.txt     # 作物利率与燃料参数数据源
+└── manifest.json
 ```
 
 ### 架构原则
@@ -140,20 +138,6 @@ BankMod/
 | SuppressEffectDurationDays | 5 | 每层打压持续天数 |
 | SuppressMaxStacks | 3 | 打压最大叠层数 |
 | AllowNegativeInterest | false | 允许存款利率变负 |
-
----
-
-## 设计文档
-
-项目架构设计遵循严格的文档驱动：
-
-| 文档 | 作用 |
-|------|------|
-| `架构总.txt` | 架构定稿（V3.1 基础 + V3.2–V3.7 增量补丁） |
-| `架构重构报告 V2.0.txt` | 实现报告（代码 vs 设计差异 + 每阶段补丁记录） |
-| `value2.txt` | 核心机制圣经（利率/复利/燃料/破产/状态乘数） |
-| `Crops values.txt` | 全作物 R 值与燃料参数数据源 |
-| `Morrio event.txt` | Morris 过场动画事件（Content Patcher 格式） |
 
 ---
 
