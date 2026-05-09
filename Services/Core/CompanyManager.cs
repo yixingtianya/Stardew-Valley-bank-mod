@@ -22,7 +22,6 @@ public class CompanyManager : ICompanyManager
     private const int MaxDynamicCompanies = 4;
     private const int MaxNewPerSeason = 2;
     private const int NewCompanyProtectionDays = 3;
-
     public CompanyManager(
         IInterestCalculator fixedInterestCalculator,
         IInterestCalculator dynamicInterestCalculator,
@@ -66,6 +65,17 @@ public class CompanyManager : ICompanyManager
         // Step 4: Update fuel inventory on the shared account → derive company statuses
         _fuelService.UpdateDailyInventory(account);
         UpdateCompanyStatuses(account);
+
+        // Daily status summary
+        if (account.DynamicCompanies.Count > 0)
+        {
+            foreach (var dc in account.DynamicCompanies)
+            {
+                _monitor.Log(
+                    $"[状态] {dc.CompanyName} | {dc.Status} | 燃料={dc.FuelStock}FP",
+                    LogLevel.Info);
+            }
+        }
 
         // Step 5: Settle daily interest (fixed + dynamic)
         SettleDailyInterest(account);
@@ -238,19 +248,9 @@ public class CompanyManager : ICompanyManager
         if (bankruptCompany is null || bankruptCompany.BankruptcySeason is null)
             return false;
 
-        string[] seasons = { "spring", "summer", "fall", "winter" };
-        string currentSeason = Game1.currentSeason.ToLower();
-        int bankruptIdx = Array.IndexOf(seasons, bankruptCompany.BankruptcySeason.ToLower());
-        int cooldownSeasonIdx = (bankruptIdx + 1) % 4;
-        string cooldownSeason = seasons[cooldownSeasonIdx];
-        int currentYear = Game1.year;
-
-        if (currentSeason == cooldownSeason && currentYear == bankruptCompany.BankruptcyYear)
-            return true;
-        if (bankruptIdx == 3 && currentSeason == "spring" && currentYear == bankruptCompany.BankruptcyYear + 1)
-            return true;
-
-        return false;
+        // Block only within the same season instance (one appearance per season)
+        return Game1.currentSeason.Equals(bankruptCompany.BankruptcySeason, StringComparison.OrdinalIgnoreCase)
+            && Game1.year == bankruptCompany.BankruptcyYear;
     }
 
     private void UpdateCompanyStatuses(BankAccountData account)
@@ -261,7 +261,10 @@ public class CompanyManager : ICompanyManager
         {
             if (company.Status == CompanyStatus.Bankrupt) continue;
 
-            double satisfaction = _fuelService.GetSatisfactionRate(new CompanyId(company.CompanyName));
+            var cropData = CropDataProvider.GetByCode(company.CropCode);
+            double satisfaction = cropData is not null && cropData.DBase > 0
+                ? company.FuelStock / (cropData.DBase * 10.0)
+                : 1.0;
 
             if (company.Status == CompanyStatus.New)
             {
@@ -270,7 +273,28 @@ public class CompanyManager : ICompanyManager
                 continue;
             }
 
-            company.Status = DeriveStatusFromSatisfaction(satisfaction);
+            var newStatus = DeriveStatusFromSatisfaction(satisfaction);
+            company.Status = newStatus;
+
+            // Fuel-starved company dies immediately
+            if (company.FuelStock <= 0 && newStatus == CompanyStatus.Dying)
+            {
+                company.Status = CompanyStatus.Bankrupt;
+                company.BankruptcySeason = Game1.currentSeason;
+                company.BankruptcyYear = Game1.year;
+
+                var ca = account.CompanyAccounts.FirstOrDefault(a => a.CompanyName == company.CompanyName);
+                if (ca is not null)
+                {
+                    ca.DepositBalance = 0;
+                    ca.BaseAmount = 0;
+                    ca.AccumulatedInterest = 0;
+                }
+
+                _monitor.Log($"公司倒闭：{company.CompanyName} 燃料耗尽，已关闭。存款清零。", LogLevel.Warn);
+                if (_config.ShowCompanyDangerWarning)
+                    Game1.chatBox?.addInfoMessage($"公司倒闭：{company.CompanyName} 燃料耗尽，已关闭。存款清零。");
+            }
         }
     }
 

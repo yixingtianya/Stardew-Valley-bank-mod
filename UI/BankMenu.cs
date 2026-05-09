@@ -208,12 +208,12 @@ internal class BankMenu : IClickableMenu
             {
                 (string statusText, Color statusColor) = dyn.Status switch
                 {
-                    CompanyStatus.New => ($"[新公司·保护期剩余 {dyn.ProtectionEndDay - (int)Game1.stats.DaysPlayed} 天]", Color.DarkCyan),
+                    CompanyStatus.New => ($"[新公司·保护期剩余 {dyn.ProtectionEndDay - (int)Game1.stats.DaysPlayed} 天]", Color.Cyan),
                     CompanyStatus.Prosperous => ("[繁荣]", Color.Gold),
-                    CompanyStatus.Stable => ("[稳定运营]", Color.DarkGreen),
-                    CompanyStatus.Hungry => ("[燃料不足·饥饿]", Color.DarkOrange),
-                    CompanyStatus.Dying => ("[濒危]", Color.DarkRed),
-                    CompanyStatus.Protection => ("[濒死保护期]", Color.DarkRed),
+                    CompanyStatus.Stable => ("[稳定运营]", Color.LimeGreen),
+                    CompanyStatus.Hungry => ("[燃料不足·饥饿]", Color.Orange),
+                    CompanyStatus.Dying => ("[濒危]", Color.Red),
+                    CompanyStatus.Protection => ("[濒死保护期]", Color.Red),
                     _ => ("", Color.Gray)
                 };
                 if (statusText.Length > 0)
@@ -242,11 +242,11 @@ internal class BankMenu : IClickableMenu
                     };
                     double dailyConsumption = dailyDemand * statusCoefficient;
 
-                    Color fuelColor = fuelRatio > 60 ? Color.DarkGreen : fuelRatio > 30 ? Color.DarkOrange : Color.DarkRed;
+                    Color fuelColor = fuelRatio > 60 ? Color.LimeGreen : fuelRatio > 30 ? Color.Orange : Color.Red;
                     DrawInfoLine(b, $"燃料库存：{displayFuel:F1} / {smaxDisplay:F0} ({fuelRatio:F0}%)", infoX + 20, infoY + lineH * (lineOffset + 1), fuelColor);
                     lineOffset++;
                     string cropUnit = cropData.DisplayName;
-                    DrawInfoLine(b, $"日消耗：≈{dailyConsumption:F1} 个{cropUnit}/天", infoX + 20, infoY + lineH * (lineOffset + 1), Color.DimGray);
+                    DrawInfoLine(b, $"日消耗：≈{dailyConsumption:F1} 个{cropUnit}/天", infoX + 20, infoY + lineH * (lineOffset + 1), Color.Gray);
                     lineOffset++;
                 }
             }

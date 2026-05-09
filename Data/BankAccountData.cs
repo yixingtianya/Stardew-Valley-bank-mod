@@ -21,6 +21,12 @@ public class BankAccountData
     /// <summary>Per-crop competitor suppression tracking (Stage 7.3).</summary>
     public List<CropSuppressionData> CropSuppressions { get; set; } = new();
 
+    // === Stage 7.3: one-time thank-you letters after first successful fuel suppression ===
+    public bool PierreLetterSent { get; set; }
+    public bool MorrisLetterSent { get; set; }
+    public string PierreThanksLetterText { get; set; } = "";
+    public string MorrisThanksLetterText { get; set; } = "";
+
     // Legacy fields — migrated to Loans on load by LoanService
     public int LoanPrincipal { get; set; }
     public int AccumulatedInterest { get; set; }

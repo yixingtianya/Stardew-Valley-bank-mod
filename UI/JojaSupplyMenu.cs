@@ -214,8 +214,9 @@ internal class JojaSupplyMenu : IClickableMenu
 
     private void SellAll()
     {
+        var snapshot = _rows.ToList();
         string summary = "";
-        foreach (var row in _rows)
+        foreach (var row in snapshot)
         {
             if (row.Quantity <= 0) continue;
             ProcessSale(row.CropCode, row.Quantity, row.PricePerItem);
@@ -253,12 +254,32 @@ internal class JojaSupplyMenu : IClickableMenu
         player.Money += revenue;
         Game1.playSound("sell");
 
-        // Stage 7.3: competitor suppression + fuel deduction
+        // Stage 7.3: fuel deduction (external sale to Joja)
         try
         {
             var account = _services.BankAccountService.Load();
-            _services.CompanyManager.ApplySuppression(account, cropCode, quantity);
-            _services.FuelService.RecordExternalSale(cropCode, quantity);
+            int penalty = _services.FuelService.RecordExternalSale(account, cropCode, quantity);
+
+            if (penalty > 0 && !account.MorrisLetterSent)
+            {
+                var company = account.DynamicCompanies.FirstOrDefault(c => c.CropCode == cropCode);
+                string competitor = company?.CompanyName ?? cropCode;
+                string cropDisplay = CropDataProvider.GetByCode(cropCode)?.DisplayName ?? cropCode;
+                account.MorrisThanksLetterText =
+                    "Joja超市 的祝贺信^发件人: Joja 客户关系部(莫里斯)^主题: 高效合作, 共赢未来!^"
+                    + "尊敬的 @, 合伙人:^"
+                    + "您近期向 Joja 超市供应的 " + cropDisplay + ", 已为我们创造了显著的竞争优势.^"
+                    + "通过将您的优质供货纳入我们的价格策略, Joja 超市已成功夺取 " + competitor + " 约 34.7% 的核心客群. 直接导致了对方启动\"紧急客户挽留计划\" -- 也就是不计成本地降价抛售, 其燃料储备正在迅速枯竭.^"
+                    + "这在 Joja 内部被称为\"战略性燃料消耗\". 您的存在, 让我们的胜利更加轻而易举.^"
+                    + "请继续向我们供货. 更大的市场份额, 与您分享.^"
+                    + "效率至真.^"
+                    + "--Joja Mart - 莫里斯";
+                account.MorrisLetterSent = true;
+                Game1.player.mailForTomorrow.Add("BankMod.MorrisThanks");
+                _helper.GameContent.InvalidateCache("Data/mail");
+                _services.Monitor.Log($"[JojaSupply] Morris thanks letter queued: {cropDisplay}", LogLevel.Info);
+            }
+
             _services.BankAccountService.Save(account);
         }
         catch (Exception ex)

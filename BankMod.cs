@@ -49,8 +49,8 @@ internal sealed class BankMod : Mod
     private Vector2? _morrisOriginalPos;
 
     private const string MorrisEventScript =
-        "continue/27 7/farmer 27 7 1 Morris 23 7 1/" +
-        "pause 500/fade/viewport 25 3/pause 400/" +
+        "continue/27 7/farmer 27 7 1 Morris 22 7 1/" +
+        "pause 500/fade/viewport 26 7/pause 400/" +
         "jump farmer/pause 800/" +
         "faceDirection farmer 3/pause 300/" +
         "speak Morris \"嘿！别碰那个周转箱，里面的样品弄乱了很麻烦。$2\"/pause 500/" +
@@ -181,7 +181,17 @@ internal sealed class BankMod : Mod
             e.Edit(assets =>
             {
                 var mailData = assets.AsDictionary<string, string>();
-                mailData.Data["BankMod_Letter"] = "亲爱的玩家，欢迎来到星露谷银行！^我们已经为您准备了专属手机，随信附上，请查收！";
+                mailData.Data["BankMod_Letter"] = "亲爱的玩家, 欢迎来到星露谷银行!^我们已经为您准备了专属手机, 随信附上, 请查收!";
+
+                BankAccountData? acc = null;
+                try { acc = _services.BankAccountService.Load(); } catch { }
+                if (acc is not null)
+                {
+                    if (!string.IsNullOrEmpty(acc.PierreThanksLetterText))
+                        mailData.Data["BankMod.PierreThanks"] = NormalizeMailText(acc.PierreThanksLetterText);
+                    if (!string.IsNullOrEmpty(acc.MorrisThanksLetterText))
+                        mailData.Data["BankMod.MorrisThanks"] = NormalizeMailText(acc.MorrisThanksLetterText);
+                }
             });
         }
     }
@@ -563,6 +573,12 @@ internal sealed class BankMod : Mod
         _morrisEventSeen = Helper.Data.ReadSaveData<string>("bankmod_morris_event_seen") == "1";
         string? phoneFlag = Helper.Data.ReadSaveData<string>(PhoneReceivedFlag);
         _hasReceivedPhoneInSession = (phoneFlag == "1");
+
+        // Invalidate Data/mail cache if letters were queued in a previous session
+        var acc = _services.BankAccountService.Load();
+        if (!string.IsNullOrEmpty(acc.PierreThanksLetterText) || !string.IsNullOrEmpty(acc.MorrisThanksLetterText))
+            Helper.GameContent.InvalidateCache("Data/mail");
+
         Monitor.Log("Save loaded, BankMod ready", LogLevel.Info);
     }
 
@@ -581,6 +597,19 @@ internal sealed class BankMod : Mod
         Monitor.Log("New day started", LogLevel.Info);
 
         string? phoneFlag = Helper.Data.ReadSaveData<string>(PhoneReceivedFlag);
+
+        // Catch phone loss that happened while a menu was open (inventory trash, etc.)
+        // OnInventoryChanged skips detection when Game1.activeClickableMenu is not null,
+        // so the flag may still be "1" even though the phone is gone.
+        if (phoneFlag == "1" && !PlayerHasPhone())
+        {
+            Helper.Data.WriteSaveData(PhoneReceivedFlag, "0");
+            phoneFlag = "0";
+            _phoneReceivedToday = false;
+            _lastReadMail = null;
+            Monitor.Log("Phone flag was 1 but phone missing from inventory — corrected to 0", LogLevel.Warn);
+        }
+
         if (phoneFlag != "1")
         {
             bool hasReceivedPhoneBefore = _hasReceivedPhoneInSession ||
@@ -633,11 +662,29 @@ internal sealed class BankMod : Mod
                     string? cropCode = ShipmentTrackingService.NormalizeItemId(kvp.Key);
                     if (cropCode != null)
                     {
-                        _services.CompanyManager.ApplySuppression(account, cropCode, sold);
-                        _services.FuelService.RecordExternalSale(cropCode, sold);
+                        int penalty = _services.FuelService.RecordExternalSale(account, cropCode, sold);
                         changed = true;
-                        var cs = account.CropSuppressions.First(s => s.CropCode == cropCode);
-                        Monitor.Log($"[Stage7] Suppression: {cropCode} x{sold} sold -> stacks={cs.Stacks} days={cs.RemainingDays}", LogLevel.Debug);
+                        Monitor.Log($"[Stage7] External sale: {cropCode} x{sold} -> {penalty} FP penalty", LogLevel.Debug);
+
+                        if (penalty > 0 && !account.PierreLetterSent)
+                        {
+                            var company = account.DynamicCompanies.FirstOrDefault(c => c.CropCode == cropCode);
+                            string competitor = company?.CompanyName ?? cropCode;
+                            string cropDisplay = CropDataProvider.GetByCode(cropCode)?.DisplayName ?? cropCode;
+                            account.PierreThanksLetterText =
+                                "皮埃尔杂货店 的祝贺信^发件人: 皮埃尔^主题: 感谢你, 我的朋友!^"
+                                + "亲爱的 @,^"
+                                + "我真不知道该如何感谢你! 你最近卖给我的这批 " + cropDisplay + ", 质量和价格都太棒了.^"
+                                + "靠着你这批货, 我稍微调整了一下售价, 就成功把顾客从 " + competitor + " 那儿吸引了过来. 你没看到, 他们店里的老主顾都开始往我这儿跑了.^"
+                                + "我听说为了留住最后几个客户, " + competitor + " 正咬着牙用比成本还低的价格在抛售存货. 啧啧, 这简直是在烧自己的\"燃料\"来续命.^"
+                                + "这, 就是商业.^"
+                                + "再次感谢你的鼎力相助, 你永远是杂货店最尊贵的朋友!^"
+                                + "--皮埃尔";
+                            account.PierreLetterSent = true;
+                            Game1.player.mailForTomorrow.Add("BankMod.PierreThanks");
+                            Helper.GameContent.InvalidateCache("Data/mail");
+                            Monitor.Log($"[Stage7] Pierre thanks letter queued: {cropDisplay}", LogLevel.Info);
+                        }
                     }
                 }
             }
@@ -709,7 +756,10 @@ internal sealed class BankMod : Mod
     {
         if (!Context.IsWorldReady) return;
         if (e.Button is not (SButton.MouseRight or SButton.ControllerA)) return;
+
         if (Game1.activeClickableMenu is not null) return;
+
+        if (TryOpenChineseMail(e)) return;
 
         // JojaMart supply box click → play Morris event → open supply menu after
         if (Game1.currentLocation?.Name == "JojaMart")
@@ -736,6 +786,7 @@ internal sealed class BankMod : Mod
                         _morrisOriginalPos = realMorris.Position;
                     }
 
+                    if (Game1.currentLocation is null) return;
                     var evt = new Event(MorrisEventScript, Game1.player);
                     Game1.currentLocation.startEvent(evt);
                     _waitingForMorrisEventEnd = true;
@@ -755,6 +806,28 @@ internal sealed class BankMod : Mod
         Helper.Input.Suppress(e.Button);
         Game1.activeClickableMenu = new BankChoiceMenu(_services, _config, Helper);
         Monitor.Log("Showing bank choice dialog", LogLevel.Debug);
+    }
+
+    private bool TryOpenChineseMail(ButtonPressedEventArgs e)
+    {
+        var mb = Game1.player?.mailbox;
+        if (mb is null || mb.Count == 0) return false;
+
+        string nextId = mb[0];
+        if (nextId is not ("BankMod_Letter" or "BankMod.PierreThanks" or "BankMod.MorrisThanks")) return false;
+
+        if (Game1.currentLocation is not Farm) return false;
+
+        var tile = e.Cursor.Tile;
+        if (Math.Abs(tile.X - 68) > 1.5f || Math.Abs(tile.Y - 16) > 1.5f) return false;
+
+        Helper.Input.Suppress(e.Button);
+
+        var mailData = Game1.content.Load<Dictionary<string, string>>("Data/mail");
+        if (mailData.TryGetValue(nextId, out string? mailText))
+            Game1.activeClickableMenu = new ChineseMailMenu(mailText, nextId);
+
+        return true;
     }
 
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
@@ -840,6 +913,7 @@ internal sealed class BankMod : Mod
                 _lastReadMail = "BankMod_Letter";
             }
         }
+
     }
 
     /*********
@@ -951,6 +1025,21 @@ internal sealed class BankMod : Mod
             Monitor.Log($"Failed to spawn phone: {ex.Message}", LogLevel.Error);
             Game1.chatBox?.addErrorMessage("Spawn phone failed!");
         }
+    }
+
+    private static string NormalizeMailText(string text)
+    {
+        return text
+            .Replace("^^", "^")
+            .Replace("：", ": ")
+            .Replace("，", ", ")
+            .Replace("。", ". ")
+            .Replace("！", "! ")
+            .Replace("？", "? ")
+            .Replace("（", "(")
+            .Replace("）", ")")
+            .Replace("——", "--")
+            .Replace("  ", " ");
     }
 
     private void ResetPhoneFlag(string command, string[] args)

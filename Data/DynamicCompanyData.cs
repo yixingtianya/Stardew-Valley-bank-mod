@@ -16,4 +16,6 @@ public class DynamicCompanyData
     public int FuelStock { get; set; }
     public string? BankruptcySeason { get; set; }
     public int BankruptcyYear { get; set; }
+    /// <summary>Accumulated fuel penalty (FP) from external sale/purchase today. Reset daily.</summary>
+    public int DailyExternalFuelPenalty { get; set; }
 }

@@ -17,6 +17,7 @@ public class FuelService : IFuelService
     private const int IridiumBonus = 10;
     private const int GoldBonus = 5;
     private const int ExternalPenalty = 5;
+    private const double DailyExternalCapRatio = 0.20;
 
     public FuelService(IBankAccountService accountService)
     {
@@ -42,14 +43,14 @@ public class FuelService : IFuelService
             company.FuelStock = smaxFP;
     }
 
-    public void RecordExternalPurchase(string cropCode, int quantity)
+    public void RecordExternalPurchase(BankAccountData account, string cropCode, int quantity)
     {
-        AdjustFuelStock(cropCode, -quantity * ExternalPenalty);
+        ApplyExternalPenalty(account, cropCode, quantity);
     }
 
-    public void RecordExternalSale(string cropCode, int quantity)
+    public int RecordExternalSale(BankAccountData account, string cropCode, int quantity)
     {
-        AdjustFuelStock(cropCode, -quantity * ExternalPenalty);
+        return ApplyExternalPenalty(account, cropCode, quantity);
     }
 
     public void UpdateDailyInventory(BankAccountData account)
@@ -57,6 +58,8 @@ public class FuelService : IFuelService
         foreach (var company in account.DynamicCompanies)
         {
             if (company.Status == CompanyStatus.Bankrupt) continue;
+
+            company.DailyExternalFuelPenalty = 0;
 
             var cropData = CropDataProvider.GetByCode(company.CropCode);
             if (cropData is null) continue;
@@ -100,15 +103,24 @@ public class FuelService : IFuelService
         return company is null ? 0 : company.FuelStock / 10.0;
     }
 
-    private void AdjustFuelStock(string cropCode, int delta)
+    private static int ApplyExternalPenalty(BankAccountData account, string cropCode, int quantity)
     {
-        var account = _accountService.Load();
         var company = account.DynamicCompanies.FirstOrDefault(c => c.CropCode == cropCode);
-        if (company is null) return;
+        if (company is null) return 0;
 
-        company.FuelStock += delta;
+        var cropData = CropDataProvider.GetByCode(cropCode);
+        if (cropData is null) return 0;
+
+        int rawPenalty = quantity * ExternalPenalty;
+        int smaxFP = (int)(cropData.Smax * FPPerCrop);
+        int dailyCap = Math.Max(1, (int)(smaxFP * DailyExternalCapRatio));
+        int remainingCap = Math.Max(0, dailyCap - company.DailyExternalFuelPenalty);
+        int actualPenalty = Math.Min(rawPenalty, remainingCap);
+
+        company.FuelStock -= actualPenalty;
         if (company.FuelStock < 0) company.FuelStock = 0;
 
-        _accountService.Save(account);
+        company.DailyExternalFuelPenalty += actualPenalty;
+        return actualPenalty;
     }
 }

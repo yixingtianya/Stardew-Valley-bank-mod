@@ -16,11 +16,12 @@ public interface IFuelService
     /// <summary>Record a shipping bin sale — adds fuel to the matching dynamic company on the given account.</summary>
     void RecordShippingBinSale(BankAccountData account, string cropCode, int quantity, int quality);
 
-    /// <summary>Record an external purchase (buying from shops) — reduces fuel (5 FP per item).</summary>
-    void RecordExternalPurchase(string cropCode, int quantity);
+    /// <summary>Record an external purchase (buying from shops) — reduces fuel (5 FP per item), capped at 20% fuel/day.</summary>
+    void RecordExternalPurchase(BankAccountData account, string cropCode, int quantity);
 
-    /// <summary>Record an external sale (selling to shops) — reduces fuel (5 FP per item).</summary>
-    void RecordExternalSale(string cropCode, int quantity);
+    /// <summary>Record an external sale (selling to shops) — reduces fuel (5 FP per item), capped at 20% fuel/day.
+    /// Returns actual fuel points deducted (0 = suppressed by daily cap or no matching company).</summary>
+    int RecordExternalSale(BankAccountData account, string cropCode, int quantity);
 
     /// <summary>Get fuel stock in display units (FP / 10).</summary>
     double GetDisplayFuelStock(CompanyId companyId);
