@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "XAjrAYA256g=",
+  "dgSpecHash": "/O1UQuXUT74=",
   "success": true,
-  "projectFilePath": "F:\\agency-agents-main\\Stardew Valley bank mod refactored\\BankMod.csproj",
+  "projectFilePath": "f:\\agency-agents-main\\Stardew Valley bank mod refactored\\BankMod.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\you yiyun\\.nuget\\packages\\pathoschild.stardew.modbuildconfig\\4.1.1\\pathoschild.stardew.modbuildconfig.4.1.1.nupkg.sha512",
     "C:\\Users\\you yiyun\\.nuget\\packages\\microsoft.netcore.app.ref\\6.0.33\\microsoft.netcore.app.ref.6.0.33.nupkg.sha512",

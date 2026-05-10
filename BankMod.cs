@@ -9,6 +9,7 @@ using StardewModdingAPI;
 using StardewModdingAPI.Events;
 using StardewValley;
 using StardewValley.GameData.Objects;
+using StardewValley.Menus;
 
 namespace BankMod;
 
@@ -42,6 +43,9 @@ internal sealed class BankMod : Mod
     private bool _lastKnownSeparateWallets; // V3.3 勘误六：分家状态变化检测（阶段十三实现）
 #pragma warning restore CS0169
     private Dictionary<string, int>? _preShopInventory; // Stage 7.3 shop sale detection
+    private bool _shopIsJoja; // 记录当前商店是否为 Joja
+    private bool _pendingPierreMail;
+    private bool _pendingMorrisMail;
     private readonly Vector2 _jojaMarkerTile = new(27, 7); // JojaMart supply shelf
     private const string MorrisEventKey = "BankMod.MorrisSampleBasket";
     private bool _waitingForMorrisEventEnd;
@@ -96,6 +100,7 @@ internal sealed class BankMod : Mod
         // Console commands
         helper.ConsoleCommands.Add("spawn_phone", I18n.Command_SpawnPhone_Desc(), SpawnPhone);
         helper.ConsoleCommands.Add("reset_phone_flag", "重置手机标志位", ResetPhoneFlag);
+        helper.ConsoleCommands.Add("bank_mail", "向信箱直接投递银行信件: bank_mail <pierre|morris>\n用于测试中文邮件显示", TestBankMail);
 
         Monitor.Log(I18n.Mod_Loaded(), LogLevel.Info);
     }
@@ -181,16 +186,30 @@ internal sealed class BankMod : Mod
             e.Edit(assets =>
             {
                 var mailData = assets.AsDictionary<string, string>();
+                // BankMod_Letter 始终注册（欢迎信，内容固定）
                 mailData.Data["BankMod_Letter"] = "亲爱的玩家, 欢迎来到星露谷银行!^我们已经为您准备了专属手机, 随信附上, 请查收!";
 
+                // Pierre/Morris 信件直接注册中文内容，由原版 LetterViewerMenu 渲染
+                // SMAPI 中文版已替换 Game1.smallFont 为支持中文的字体
+                if (!mailData.Data.ContainsKey("BankMod.PierreThanks"))
+                    mailData.Data["BankMod.PierreThanks"] = "占位^Pierre信件";
+                if (!mailData.Data.ContainsKey("BankMod.MorrisThanks"))
+                    mailData.Data["BankMod.MorrisThanks"] = "占位^Morris信件";
+
+                // 如果存档中有真实信件内容，用真实内容覆盖占位
                 BankAccountData? acc = null;
                 try { acc = _services.BankAccountService.Load(); } catch { }
                 if (acc is not null)
                 {
+                    Monitor.Log($"[AssetRequested] Data/mail loading: PierreText='{(acc.PierreThanksLetterText?.Length > 0 ? acc.PierreThanksLetterText.Substring(0, Math.Min(30, acc.PierreThanksLetterText.Length)) + "..." : "null")}', MorrisText='{(acc.MorrisThanksLetterText?.Length > 0 ? acc.MorrisThanksLetterText.Substring(0, Math.Min(30, acc.MorrisThanksLetterText.Length)) + "..." : "null")}'", LogLevel.Info);
                     if (!string.IsNullOrEmpty(acc.PierreThanksLetterText))
                         mailData.Data["BankMod.PierreThanks"] = NormalizeMailText(acc.PierreThanksLetterText);
                     if (!string.IsNullOrEmpty(acc.MorrisThanksLetterText))
                         mailData.Data["BankMod.MorrisThanks"] = NormalizeMailText(acc.MorrisThanksLetterText);
+                }
+                else
+                {
+                    Monitor.Log($"[AssetRequested] Data/mail loading: acc is null", LogLevel.Warn);
                 }
             });
         }
@@ -596,6 +615,8 @@ internal sealed class BankMod : Mod
 
         Monitor.Log("New day started", LogLevel.Info);
 
+        DumpMailDebugInfo();
+
         string? phoneFlag = Helper.Data.ReadSaveData<string>(PhoneReceivedFlag);
 
         // Catch phone loss that happened while a menu was open (inventory trash, etc.)
@@ -637,12 +658,17 @@ internal sealed class BankMod : Mod
         }
 
         // Stage 7.3: shop sale detection — snapshot inventory when shop opens
-        if (e.NewMenu is StardewValley.Menus.ShopMenu && Context.IsMainPlayer)
+        if (e.NewMenu is StardewValley.Menus.ShopMenu shopMenu && Context.IsMainPlayer)
         {
             _preShopInventory = Game1.player.Items
                 .Where(item => item is StardewValley.Object)
                 .GroupBy(item => item.QualifiedItemId)
                 .ToDictionary(g => g.Key, g => g.Sum(item => item.Stack));
+
+            // 判断是否为 Joja 商店（通过 ShopId 或当前所在位置）
+            string shopId = shopMenu.ShopId ?? "";
+            _shopIsJoja = shopId.Contains("Joja", StringComparison.OrdinalIgnoreCase)
+                || Game1.currentLocation?.Name == "JojaMart";
             return;
         }
         // Shop closed — diff inventory to detect sold items
@@ -664,26 +690,22 @@ internal sealed class BankMod : Mod
                     {
                         int penalty = _services.FuelService.RecordExternalSale(account, cropCode, sold);
                         changed = true;
-                        Monitor.Log($"[Stage7] External sale: {cropCode} x{sold} -> {penalty} FP penalty", LogLevel.Debug);
+                        Monitor.Log($"[Stage7] External sale at {(_shopIsJoja ? "Joja" : "Pierre")}: {cropCode} x{sold} -> {penalty} FP penalty", LogLevel.Debug);
 
-                        if (penalty > 0 && !account.PierreLetterSent)
+                        if (penalty > 0)
                         {
                             var company = account.DynamicCompanies.FirstOrDefault(c => c.CropCode == cropCode);
                             string competitor = company?.CompanyName ?? cropCode;
                             string cropDisplay = CropDataProvider.GetByCode(cropCode)?.DisplayName ?? cropCode;
-                            account.PierreThanksLetterText =
-                                "皮埃尔杂货店 的祝贺信^发件人: 皮埃尔^主题: 感谢你, 我的朋友!^"
-                                + "亲爱的 @,^"
-                                + "我真不知道该如何感谢你! 你最近卖给我的这批 " + cropDisplay + ", 质量和价格都太棒了.^"
-                                + "靠着你这批货, 我稍微调整了一下售价, 就成功把顾客从 " + competitor + " 那儿吸引了过来. 你没看到, 他们店里的老主顾都开始往我这儿跑了.^"
-                                + "我听说为了留住最后几个客户, " + competitor + " 正咬着牙用比成本还低的价格在抛售存货. 啧啧, 这简直是在烧自己的\"燃料\"来续命.^"
-                                + "这, 就是商业.^"
-                                + "再次感谢你的鼎力相助, 你永远是杂货店最尊贵的朋友!^"
-                                + "--皮埃尔";
-                            account.PierreLetterSent = true;
-                            Game1.player.mailForTomorrow.Add("BankMod.PierreThanks");
-                            Helper.GameContent.InvalidateCache("Data/mail");
-                            Monitor.Log($"[Stage7] Pierre thanks letter queued: {cropDisplay}", LogLevel.Info);
+
+                            // 检测银行欢迎信是否已发送（以银行欢迎信为标志）
+                            bool hasBankLetter = _hasReceivedPhoneInSession ||
+                                (Game1.player?.mailReceived?.Contains("BankMod_Letter") == true);
+
+                            // 根据商店类型触发对应信件：Joja 卖 → Morris 信，皮埃尔卖 → Pierre 信
+                            string letterType = _shopIsJoja ? "morris" : "pierre";
+                            if (_services.TriggerThanksLetter(account, letterType, cropCode, cropDisplay, competitor, hasBankLetter))
+                                UpdateMailCache(account);
                         }
                     }
                 }
@@ -698,6 +720,52 @@ internal sealed class BankMod : Mod
 
         if (!Context.IsWorldReady || Game1.player is null)
             return;
+
+        // 调试：记录所有菜单变化
+        Monitor.Log($"[MailDebug] MenuChanged: NewMenu={e.NewMenu?.GetType().Name ?? "null"}", LogLevel.Info);
+
+        if (e.NewMenu is LetterViewerMenu lvm)
+        {
+            Monitor.Log($"[MailDebug] LetterViewerMenu opened, mailTitle='{lvm.mailTitle}'", LogLevel.Info);
+
+            // 当 BankMod 感谢信打开时，Data/mail 缓存可能还是占位符
+            // 直接从存档读取真实内容，通过反射替换 LetterViewerMenu 内部的信件文本
+            string title = lvm.mailTitle ?? "";
+            if (title is "BankMod.PierreThanks" or "BankMod.MorrisThanks")
+            {
+                try
+                {
+                    var acc = _services.BankAccountService.Load();
+                    string? realText = title == "BankMod.PierreThanks"
+                        ? acc.PierreThanksLetterText
+                        : acc.MorrisThanksLetterText;
+
+                    if (!string.IsNullOrEmpty(realText))
+                    {
+                        // 反射获取 LetterViewerMenu 的 mailMessage 字段并替换
+                        var mailMsgField = typeof(LetterViewerMenu).GetField("mailMessage",
+                            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
+                        if (mailMsgField != null)
+                        {
+                            // ^ 是星露谷信件换行符，^^ 是空行，^^^ 是自定义分页标记
+                            // 先按 ^^^ 分页，再在每个页面内保留 ^ 和 ^^ 供游戏渲染引擎处理
+                            string normalized = NormalizeMailText(realText);
+                            string[] pages = normalized.Split(new[] { "^^^" }, StringSplitOptions.RemoveEmptyEntries);
+                            mailMsgField.SetValue(lvm, new List<string>(pages));
+                            Monitor.Log($"[MailDebug] Replaced {title} content via reflection ({pages.Length} pages)", LogLevel.Info);
+                        }
+                        else
+                        {
+                            Monitor.Log($"[MailDebug] Could not find mailMessage field on LetterViewerMenu", LogLevel.Warn);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Monitor.Log($"[MailDebug] Failed to replace mail content: {ex.Message}", LogLevel.Warn);
+                }
+            }
+        }
 
         if (e.OldMenu is MailboxDialog mailboxDialog)
         {
@@ -759,8 +827,6 @@ internal sealed class BankMod : Mod
 
         if (Game1.activeClickableMenu is not null) return;
 
-        if (TryOpenChineseMail(e)) return;
-
         // JojaMart supply box click → play Morris event → open supply menu after
         if (Game1.currentLocation?.Name == "JojaMart")
         {
@@ -801,33 +867,11 @@ internal sealed class BankMod : Mod
             }
         }
 
-        if (Game1.player.CurrentItem?.QualifiedItemId != PhoneItem.QualifiedItemId) return;
+        if (Game1.player?.CurrentItem?.QualifiedItemId != PhoneItem.QualifiedItemId) return;
 
         Helper.Input.Suppress(e.Button);
         Game1.activeClickableMenu = new BankChoiceMenu(_services, _config, Helper);
         Monitor.Log("Showing bank choice dialog", LogLevel.Debug);
-    }
-
-    private bool TryOpenChineseMail(ButtonPressedEventArgs e)
-    {
-        var mb = Game1.player?.mailbox;
-        if (mb is null || mb.Count == 0) return false;
-
-        string nextId = mb[0];
-        if (nextId is not ("BankMod_Letter" or "BankMod.PierreThanks" or "BankMod.MorrisThanks")) return false;
-
-        if (Game1.currentLocation is not Farm) return false;
-
-        var tile = e.Cursor.Tile;
-        if (Math.Abs(tile.X - 68) > 1.5f || Math.Abs(tile.Y - 16) > 1.5f) return false;
-
-        Helper.Input.Suppress(e.Button);
-
-        var mailData = Game1.content.Load<Dictionary<string, string>>("Data/mail");
-        if (mailData.TryGetValue(nextId, out string? mailText))
-            Game1.activeClickableMenu = new ChineseMailMenu(mailText, nextId);
-
-        return true;
     }
 
     private void OnUpdateTicked(object? sender, UpdateTickedEventArgs e)
@@ -903,6 +947,29 @@ internal sealed class BankMod : Mod
         }
         _lastLocationName = currentLocation;
 
+        // Pierre/Morris 信件投递：独立于农场进入检测，pending 标志一设置就投递
+        // Data/mail 中始终有占位条目，游戏一定能创建 LetterViewerMenu
+        if (_pendingPierreMail || _services.PendingPierreMail)
+        {
+            _pendingPierreMail = false;
+            _services.PendingPierreMail = false;
+            if (!Game1.player.mailbox.Contains("BankMod.PierreThanks"))
+            {
+                Game1.player.mailbox.Add("BankMod.PierreThanks");
+                Monitor.Log("[MailDebug] Pierre mail added to mailbox", LogLevel.Info);
+            }
+        }
+        if (_pendingMorrisMail || _services.PendingMorrisMail)
+        {
+            _pendingMorrisMail = false;
+            _services.PendingMorrisMail = false;
+            if (!Game1.player.mailbox.Contains("BankMod.MorrisThanks"))
+            {
+                Game1.player.mailbox.Add("BankMod.MorrisThanks");
+                Monitor.Log("[MailDebug] Morris mail added to mailbox", LogLevel.Info);
+            }
+        }
+
         if (_lastReadMail != "BankMod_Letter" && !Game1.player.mailbox.Contains("BankMod_Letter"))
         {
             string? phoneFlag = Helper.Data.ReadSaveData<string>(PhoneReceivedFlag);
@@ -976,7 +1043,11 @@ internal sealed class BankMod : Mod
         {
             _phoneReceivedToday = true;
             _hasReceivedPhoneInSession = true;
+            _services.HasReceivedPhoneInSession = true;
             Helper.Data.WriteSaveData(PhoneReceivedFlag, "1");
+            // 标记银行欢迎信为已接收，确保后续 JojaSupplyMenu 等处的 mailReceived 检查通过
+            if (!Game1.player.mailReceived.Contains("BankMod_Letter"))
+                Game1.player.mailReceived.Add("BankMod_Letter");
             Game1.chatBox?.addInfoMessage(I18n.Chat_PhoneReceived());
             Monitor.Log("Phone given to player, status set to 1", LogLevel.Info);
         }
@@ -1027,10 +1098,11 @@ internal sealed class BankMod : Mod
         }
     }
 
+    public static string NormalizeMailTextPublic(string text) => NormalizeMailText(text);
+
     private static string NormalizeMailText(string text)
     {
         return text
-            .Replace("^^", "^")
             .Replace("：", ": ")
             .Replace("，", ", ")
             .Replace("。", ". ")
@@ -1042,12 +1114,135 @@ internal sealed class BankMod : Mod
             .Replace("  ", " ");
     }
 
+    /// <summary>
+    /// 直接更新内存中 Data/mail 的信件内容，绕过 SMAPI AssetRequested 缓存问题。
+    /// 在 TriggerThanksLetter 成功后调用，确保 LetterViewerMenu 能读到真实内容。
+    /// </summary>
+    private void UpdateMailCache(BankAccountData account)
+    {
+        try
+        {
+            var mailData = Helper.GameContent.Load<Dictionary<string, string>>("Data/mail");
+            if (!string.IsNullOrEmpty(account.PierreThanksLetterText))
+            {
+                mailData["BankMod.PierreThanks"] = NormalizeMailText(account.PierreThanksLetterText);
+                Monitor.Log("[MailCache] Updated BankMod.PierreThanks in memory", LogLevel.Info);
+            }
+            if (!string.IsNullOrEmpty(account.MorrisThanksLetterText))
+            {
+                mailData["BankMod.MorrisThanks"] = NormalizeMailText(account.MorrisThanksLetterText);
+                Monitor.Log("[MailCache] Updated BankMod.MorrisThanks in memory", LogLevel.Info);
+            }
+        }
+        catch (Exception ex)
+        {
+            Monitor.Log($"[MailCache] Failed to update mail cache: {ex.Message}", LogLevel.Warn);
+        }
+    }
+
+    private void DumpMailDebugInfo()
+    {
+        var player = Game1.player;
+        if (player is null) return;
+
+        var mailbox = player.mailbox;
+        var mailForTomorrow = player.mailForTomorrow;
+        Monitor.Log($"[MailDebug] --- Day Start Mail Dump ---", LogLevel.Info);
+        Monitor.Log($"[MailDebug] mailbox count={mailbox?.Count ?? -1}: [{string.Join(", ", mailbox ?? new())}]", LogLevel.Info);
+        Monitor.Log($"[MailDebug] mailForTomorrow count={mailForTomorrow?.Count ?? -1}: [{string.Join(", ", mailForTomorrow ?? new())}]", LogLevel.Info);
+
+        try
+        {
+            var mailData = Helper.GameContent.Load<Dictionary<string, string>>("Data/mail");
+            Monitor.Log($"[MailDebug] Data/mail has BankMod_Letter={mailData.ContainsKey("BankMod_Letter")}, BankMod.PierreThanks={mailData.ContainsKey("BankMod.PierreThanks")}, BankMod.MorrisThanks={mailData.ContainsKey("BankMod.MorrisThanks")}", LogLevel.Info);
+            if (mailData.TryGetValue("BankMod.PierreThanks", out var pt))
+                Monitor.Log($"[MailDebug] BankMod.PierreThanks text len={pt?.Length ?? -1}", LogLevel.Info);
+            if (mailData.TryGetValue("BankMod.MorrisThanks", out var mt))
+                Monitor.Log($"[MailDebug] BankMod.MorrisThanks text len={mt?.Length ?? -1}", LogLevel.Info);
+        }
+        catch (Exception ex)
+        {
+            Monitor.Log($"[MailDebug] Error reading Data/mail: {ex.Message}", LogLevel.Error);
+        }
+    }
+
     private void ResetPhoneFlag(string command, string[] args)
     {
         Helper.Data.WriteSaveData(PhoneReceivedFlag, "0");
         _phoneReceivedToday = false;
         Game1.chatBox?.addInfoMessage("手机标志位已重置为0");
         Monitor.Log("Phone status reset to 0", LogLevel.Info);
+    }
+
+    private void TestBankMail(string command, string[] args)
+    {
+        if (!Context.IsWorldReady || Game1.player is null)
+        {
+            Monitor.Log("[bank_mail] 游戏尚未就绪", LogLevel.Warn);
+            return;
+        }
+
+        string type = args.Length > 0 ? args[0].ToLower() : "";
+
+        // 检测银行欢迎信是否已发送（以银行欢迎信为标志）
+        // 控制台命令测试时：允许新存档直接测试，游戏内触发仍需检查
+        bool hasBankLetter = _hasReceivedPhoneInSession || 
+            (Game1.player.mailReceived?.Contains("BankMod_Letter") == true);
+        
+        // 控制台命令总是允许执行（方便测试），但会记录日志
+        if (!hasBankLetter)
+        {
+            Monitor.Log("[bank_mail] 新存档检测到，跳过银行欢迎信检查（仅控制台测试）", LogLevel.Info);
+            // 强制设置标志以便测试
+            _hasReceivedPhoneInSession = true;
+        }
+
+        switch (type)
+        {
+            case "pierre":
+            {
+                // 检测是否已发送过
+                var accP = _services.BankAccountService.Load();
+                if (accP.PierreLetterSent)
+                {
+                    Monitor.Log("[bank_mail] Pierre 信已发送过，跳过", LogLevel.Info);
+                    Game1.chatBox?.addInfoMessage("Pierre 信已发送过，请重新开存档测试");
+                    return;
+                }
+                
+                // 使用统一的触发方法设置信件内容
+                _services.TriggerThanksLetter(accP, "pierre", "test_crop", "测试作物", "Joja超市", true);
+                _services.BankAccountService.Save(accP);
+                UpdateMailCache(accP);
+                Monitor.Log("[bank_mail] Pierre mail queued for display", LogLevel.Info);
+                Game1.chatBox?.addInfoMessage("Pierre 信已触发，将在下一帧显示");
+                break;
+            }
+
+            case "morris":
+            {
+                // 检测是否已发送过
+                var accM = _services.BankAccountService.Load();
+                if (accM.MorrisLetterSent)
+                {
+                    Monitor.Log("[bank_mail] Morris 信已发送过，跳过", LogLevel.Info);
+                    Game1.chatBox?.addInfoMessage("Morris 信已发送过，请重新开存档测试");
+                    return;
+                }
+                
+                // 使用统一的触发方法设置信件内容
+                _services.TriggerThanksLetter(accM, "morris", "test_crop", "测试作物", "皮埃尔杂货店", true);
+                _services.BankAccountService.Save(accM);
+                UpdateMailCache(accM);
+                Monitor.Log("[bank_mail] Morris mail queued for display", LogLevel.Info);
+                Game1.chatBox?.addInfoMessage("Morris 信已触发，将在下一帧显示");
+                break;
+            }
+
+            default:
+                Game1.chatBox?.addInfoMessage("用法: bank_mail <pierre|morris>");
+                return;
+        }
     }
 
     /// <summary>DialogueBox subclass with a titleInPosition field to satisfy GMCM's reflection check. GMCM reads it as bool, not Point.</summary>

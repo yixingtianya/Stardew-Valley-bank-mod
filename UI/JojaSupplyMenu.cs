@@ -260,24 +260,34 @@ internal class JojaSupplyMenu : IClickableMenu
             var account = _services.BankAccountService.Load();
             int penalty = _services.FuelService.RecordExternalSale(account, cropCode, quantity);
 
-            if (penalty > 0 && !account.MorrisLetterSent)
+            if (penalty > 0)
             {
                 var company = account.DynamicCompanies.FirstOrDefault(c => c.CropCode == cropCode);
                 string competitor = company?.CompanyName ?? cropCode;
                 string cropDisplay = CropDataProvider.GetByCode(cropCode)?.DisplayName ?? cropCode;
-                account.MorrisThanksLetterText =
-                    "Joja超市 的祝贺信^发件人: Joja 客户关系部(莫里斯)^主题: 高效合作, 共赢未来!^"
-                    + "尊敬的 @, 合伙人:^"
-                    + "您近期向 Joja 超市供应的 " + cropDisplay + ", 已为我们创造了显著的竞争优势.^"
-                    + "通过将您的优质供货纳入我们的价格策略, Joja 超市已成功夺取 " + competitor + " 约 34.7% 的核心客群. 直接导致了对方启动\"紧急客户挽留计划\" -- 也就是不计成本地降价抛售, 其燃料储备正在迅速枯竭.^"
-                    + "这在 Joja 内部被称为\"战略性燃料消耗\". 您的存在, 让我们的胜利更加轻而易举.^"
-                    + "请继续向我们供货. 更大的市场份额, 与您分享.^"
-                    + "效率至真.^"
-                    + "--Joja Mart - 莫里斯";
-                account.MorrisLetterSent = true;
-                Game1.player.mailForTomorrow.Add("BankMod.MorrisThanks");
-                _helper.GameContent.InvalidateCache("Data/mail");
-                _services.Monitor.Log($"[JojaSupply] Morris thanks letter queued: {cropDisplay}", LogLevel.Info);
+
+                // 检测银行欢迎信是否已发送（以银行欢迎信为标志）
+                bool hasBankLetter = _services.HasReceivedPhoneInSession
+                    || (Game1.player?.mailReceived?.Contains("BankMod_Letter") == true);
+
+                // 使用统一的触发方法（Morris 触发源），传入同一 account 避免覆盖
+                if (_services.TriggerThanksLetter(account, "morris", cropCode, cropDisplay, competitor, hasBankLetter))
+                {
+                    // 直接更新内存中的 Data/mail，绕过 SMAPI 缓存问题
+                    try
+                    {
+                        var mailData = _helper.GameContent.Load<Dictionary<string, string>>("Data/mail");
+                        if (!string.IsNullOrEmpty(account.MorrisThanksLetterText))
+                        {
+                            mailData["BankMod.MorrisThanks"] = BankMod.NormalizeMailTextPublic(account.MorrisThanksLetterText);
+                            _services.Monitor.Log("[MailCache] Updated BankMod.MorrisThanks in memory (JojaSupply)", LogLevel.Info);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _services.Monitor.LogOnce($"[MailCache] Failed to update mail cache: {ex.Message}");
+                    }
+                }
             }
 
             _services.BankAccountService.Save(account);

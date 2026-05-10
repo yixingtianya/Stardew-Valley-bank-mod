@@ -7,10 +7,11 @@ namespace BankMod.UI;
 
 internal class ChineseMailMenu : IClickableMenu
 {
-    private const float LineSpacing = 40f;
-    private const float TitleMarginTop = 24f;
-    private const float SenderMarginTop = 30f;
-    private const float BodyMarginTop = 50f;
+    private const float LineSpacing = 32f;
+    private const float TextLeftMargin = 72f;
+    private const float TextTopMargin = 64f;
+
+    private static Texture2D? _letterBg;
 
     private readonly string _title;
     private readonly string _sender;
@@ -18,7 +19,7 @@ internal class ChineseMailMenu : IClickableMenu
     private readonly bool _isJoja;
 
     public ChineseMailMenu(string mailText, string mailId)
-        : base(0, 0, 640, 480)
+        : base(0, 0, 640, 360)
     {
         xPositionOnScreen = (Game1.uiViewport.Width - width) / 2;
         yPositionOnScreen = (Game1.uiViewport.Height - height) / 2;
@@ -53,15 +54,36 @@ internal class ChineseMailMenu : IClickableMenu
 
     public override void draw(SpriteBatch b)
     {
+        // 1. Dark overlay — vanilla LetterViewerMenu style
+        b.Draw(Game1.fadeToBlackRect,
+            Game1.graphics.GraphicsDevice.Viewport.Bounds,
+            Color.Black * 0.75f);
+
+        // 2. Background — Joja or vanilla letter
         if (_isJoja)
-            DrawJojaBackground(b, xPositionOnScreen, yPositionOnScreen, width, height);
+        {
+            drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 320, 60, 60),
+                xPositionOnScreen, yPositionOnScreen, width, height, Color.White, 1f, true);
+        }
         else
-            Game1.drawDialogueBox(xPositionOnScreen, yPositionOnScreen, width, height, false, true);
+        {
+            // Vanilla letter: letterBG texture at scale 2 (320*2=640, 180*2=360)
+            _letterBg ??= Game1.temporaryContent.Load<Texture2D>("LooseSprites\\letterBG");
+            b.Draw(_letterBg,
+                new Vector2(xPositionOnScreen, yPositionOnScreen),
+                new Rectangle(0, 0, 320, 180),
+                Color.White, 0f, Vector2.Zero, 2f, SpriteEffects.None, 0.86f);
 
+            // Wax seal decoration at top center — vanilla letter style
+            b.Draw(Game1.mouseCursors,
+                new Vector2(xPositionOnScreen + width / 2 - 40, yPositionOnScreen - 40),
+                new Rectangle(578, 1782, 46, 44),
+                Color.White, 0f, Vector2.Zero, 2f, SpriteEffects.None, 0.88f);
+        }
+
+        // 3. Draw text
         Color textColor = _isJoja ? new Color(30, 30, 30) : Game1.textColor;
-
-        int textAreaTop = yPositionOnScreen + 32;
-        float y = textAreaTop + TitleMarginTop;
+        float y = yPositionOnScreen + TextTopMargin;
 
         if (!string.IsNullOrEmpty(_title))
         {
@@ -69,42 +91,34 @@ internal class ChineseMailMenu : IClickableMenu
             float titleX = xPositionOnScreen + (width - titleSize.X) / 2;
             b.DrawString(Game1.dialogueFont, _title, new Vector2(titleX, y), textColor,
                 0f, Vector2.Zero, 1f, SpriteEffects.None, 0.86f);
-            y += titleSize.Y;
+            y += titleSize.Y + 8f;
         }
 
         if (!string.IsNullOrEmpty(_sender))
         {
-            y += SenderMarginTop;
             Vector2 senderSize = Game1.smallFont.MeasureString(_sender);
             float senderX = xPositionOnScreen + (width - senderSize.X) / 2;
             b.DrawString(Game1.smallFont, _sender, new Vector2(senderX, y), textColor * 0.7f,
                 0f, Vector2.Zero, 1f, SpriteEffects.None, 0.86f);
-            y += senderSize.Y;
+            y += senderSize.Y + 12f;
         }
 
-        y += BodyMarginTop;
+        // Body text — left-aligned (vanilla style)
         foreach (var line in _bodyLines)
-            y = DrawLine(b, line, y, textColor);
+        {
+            if (string.IsNullOrEmpty(line))
+            {
+                y += LineSpacing;
+                continue;
+            }
+            b.DrawString(Game1.smallFont, line,
+                new Vector2(xPositionOnScreen + TextLeftMargin, y), textColor,
+                0f, Vector2.Zero, 1f, SpriteEffects.None, 0.86f);
+            y += LineSpacing;
+        }
 
         base.draw(b);
-    }
-
-    private static void DrawJojaBackground(SpriteBatch b, int x, int y, int w, int h)
-    {
-        IClickableMenu.drawTextureBox(b, Game1.menuTexture, new Rectangle(0, 320, 60, 60),
-            x, y, w, h, Color.White, 1f, true);
-    }
-
-    private float DrawLine(SpriteBatch b, string line, float y, Color color)
-    {
-        if (string.IsNullOrEmpty(line))
-            return y + LineSpacing;
-
-        Vector2 size = Game1.smallFont.MeasureString(line);
-        float x = xPositionOnScreen + (width - size.X) / 2;
-        b.DrawString(Game1.smallFont, line, new Vector2(x, y), color,
-            0f, Vector2.Zero, 1f, SpriteEffects.None, 0.86f);
-        return y + LineSpacing;
+        drawMouse(b);
     }
 
     public override void receiveLeftClick(int x, int y, bool playSound = true)
@@ -115,10 +129,5 @@ internal class ChineseMailMenu : IClickableMenu
     public override void receiveRightClick(int x, int y, bool playSound = true)
     {
         exitThisMenu();
-    }
-
-    public override void performHoverAction(int x, int y)
-    {
-        base.performHoverAction(x, y);
     }
 }
