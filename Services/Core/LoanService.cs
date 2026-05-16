@@ -6,7 +6,8 @@ using StardewValley;
 namespace BankMod.Services.Core;
 
 /// <summary>
-/// Full loan service: issuance, daily interest accrual, due-date auto-repayment, and default handling.
+/// Full loan service: issuance, daily interest deduction (Stage 8 dynamic cash collection),
+/// interest debt tracking, due-date auto-repayment, principal debt grace period, and forced collection.
 /// </summary>
 public class LoanService : ILoanService
 {
@@ -26,17 +27,27 @@ public class LoanService : ILoanService
         if (amount <= 0 || repaymentDays is not (7 or 14))
             return false;
 
-        var existing = GetLoan(account, company.Name);
+        // Stage 8: Bankruptcy blocks borrowing
+        if (account.IsInBankruptcy)
+            return false;
 
-        // Check per-company loan limit
-        int currentPrincipal = existing?.Principal ?? 0;
-        if (currentPrincipal + amount > company.LoanLimit)
+        // Stage 9: Hungry/Dying dynamic companies block borrowing (value2.txt §5.1)
+        if (company.IsDynamic)
+        {
+            var dyn = account.DynamicCompanies.FirstOrDefault(c => c.CompanyName == company.Name);
+            if (dyn is not null && (dyn.Status == CompanyStatus.Hungry || dyn.Status == CompanyStatus.Dying))
+                return false;
+        }
+
+        // Check per-company loan limit (exclude transferred loans — they don't consume the receiving company's limit)
+        int companyPrincipal = account.Loans.Where(l => l.CompanyName == company.Name && !l.IsTransferred).Sum(l => l.Principal);
+        if (companyPrincipal + amount > company.LoanLimit)
             return false;
 
         // Check global leverage-based credit limit
         int globalLimit = GetGlobalCreditLimit(account, config);
-        int totalLoans = account.Loans.Sum(l => l.Principal) + amount;
-        if (totalLoans > globalLimit)
+        int totalPrincipal = account.Loans.Sum(l => l.Principal) + amount;
+        if (totalPrincipal > globalLimit)
             return false;
 
         // Calculate effective rate (with weather/luck influence + 14-day discount)
@@ -47,34 +58,46 @@ public class LoanService : ILoanService
             effectiveRate = Math.Max(0, baseRate - config.LongTermRateDiscount);
 
         int today = (int)Game1.stats.DaysPlayed;
+        int dueDay = today + repaymentDays;
 
-        if (existing is not null)
+        // Merge with existing loan if same company + same due day + same period (same-day same-terms borrow)
+        var sameDayLoan = account.Loans.FirstOrDefault(l =>
+            l.CompanyName == company.Name && l.DueDay == dueDay && l.RepaymentPeriodDays == repaymentDays);
+
+        if (sameDayLoan is not null)
         {
-            // Top-up: increase principal, recalculate effective rate as weighted average
-            int newTotal = existing.Principal + amount;
-            existing.InterestRate = ((existing.InterestRate * existing.Principal) + (effectiveRate * amount)) / newTotal;
-            existing.Principal = newTotal;
+            int newTotal = sameDayLoan.Principal + amount;
+            sameDayLoan.InterestRate = ((sameDayLoan.InterestRate * sameDayLoan.Principal) + (effectiveRate * amount)) / newTotal;
+            sameDayLoan.Principal = newTotal;
         }
         else
         {
-            existing = new LoanRecord
+            var loan = new LoanRecord
             {
                 CompanyName = company.Name,
                 Principal = amount,
                 InterestRate = effectiveRate,
                 RepaymentPeriodDays = repaymentDays,
-                DueDay = today + repaymentDays,
+                DueDay = dueDay,
                 LoanStartDay = today,
                 IsInDefault = false,
-                DefaultDaysRemaining = 0
+                DefaultDaysRemaining = 0,
+                IsInInterestDebt = false,
+                OverdueInterest = 0
             };
-            account.Loans.Add(existing);
+            account.Loans.Add(loan);
         }
 
         // Transfer gold to player
         Game1.player.Money += amount;
 
         return true;
+    }
+
+    /// <summary>Get all active loans for a specific company (independent records, not merged).</summary>
+    public IReadOnlyList<LoanRecord> GetCompanyLoans(BankAccountData account, string companyName)
+    {
+        return account.Loans.Where(l => l.CompanyName == companyName).ToList();
     }
 
     /// <summary>Calculate global borrowing limit: min(net_worth × leverage_coeff, hard_cap).</summary>
@@ -86,13 +109,12 @@ public class LoanService : ILoanService
         if (netWorth <= 0)
             return 0;
 
-        int leverageLimit = (int)(netWorth * config.BorrowingLeverageCoefficient);
-        return Math.Min(leverageLimit, config.BorrowingHardCap);
+        return (int)(netWorth * config.BorrowingLeverageCoefficient);
     }
 
     public int RepayLoan(LoanRecord loan, int requestedAmount, BankAccountData account)
     {
-        if (requestedAmount <= 0 || (loan.Principal <= 0 && loan.AccumulatedInterest <= 0))
+        if (requestedAmount <= 0 || (loan.Principal <= 0 && loan.AccumulatedInterest <= 0 && loan.OverdueInterest <= 0))
             return 0;
 
         // Manual repayment: cash + same-company deposit only (preserves player choice)
@@ -100,7 +122,7 @@ public class LoanService : ILoanService
         int sameDeposit = sameCompany?.DepositBalance ?? 0;
         int available = Game1.player.Money + sameDeposit;
 
-        int totalOwed = loan.Principal + loan.AccumulatedInterest;
+        int totalOwed = loan.Principal + loan.AccumulatedInterest + loan.OverdueInterest;
         int actualPaid = Math.Min(requestedAmount, Math.Min(available, totalOwed));
 
         if (actualPaid <= 0)
@@ -118,92 +140,187 @@ public class LoanService : ILoanService
             sameCompany.BaseAmount = Math.Max(0, sameCompany.BaseAmount - fromDeposit);
         }
 
-        // Payment order: accumulated interest first, then principal
+        // Payment order: overdue interest first, then accumulated interest, then principal
+        int overduePaid = Math.Min(actualPaid, loan.OverdueInterest);
+        loan.OverdueInterest -= overduePaid;
+        actualPaid -= overduePaid;
+
         int interestPaid = Math.Min(actualPaid, loan.AccumulatedInterest);
         loan.AccumulatedInterest -= interestPaid;
-        int principalPaid = Math.Min(actualPaid - interestPaid, loan.Principal);
+        actualPaid -= interestPaid;
+
+        int principalPaid = Math.Min(actualPaid, loan.Principal);
         loan.Principal -= principalPaid;
 
-        // If loan fully repaid, remove it
-        if (loan.Principal <= 0 && loan.AccumulatedInterest <= 0)
+        // Clear interest debt if overdue is fully paid
+        if (loan.OverdueInterest <= 0)
+        {
+            loan.IsInInterestDebt = false;
+            loan.OverdueInterest = 0;
+        }
+
+        // If loan fully repaid, remove it and re-check bankruptcy
+        if (loan.Principal <= 0 && loan.AccumulatedInterest <= 0 && loan.OverdueInterest <= 0)
         {
             account.Loans.Remove(loan);
+            // Exit bankruptcy if no frozen loans remain
+            if (!account.Loans.Any(l => l.IsFrozen))
+            {
+                account.IsInBankruptcy = false;
+                account.BankruptcyWarningShown = false;
+            }
         }
         else
         {
-            // Clear default status if enough was paid
-            if (loan.IsInDefault)
+            // If loan was overdue (in default), partial repayment does NOT clear default or reset due date.
+            // The full debt (principal + interest + overdue) must be paid to exit default.
+            // For non-defaulted loans, partial early repayment resets the due date (refinancing).
+            if (!loan.IsInDefault && !loan.IsFrozen)
             {
-                loan.IsInDefault = false;
-                loan.DefaultDaysRemaining = 0;
+                int today = (int)Game1.stats.DaysPlayed;
+                loan.DueDay = today + loan.RepaymentPeriodDays;
             }
-
-            // Reset due date: extend by the original repayment period from today
-            int today = (int)Game1.stats.DaysPlayed;
-            loan.DueDay = today + loan.RepaymentPeriodDays;
         }
 
-        return actualPaid;
+        return cashUsed + (r > 0 ? 0 : 0); // Return actual paid for caller use
     }
 
+    /// <summary>
+    /// Daily tick: interest collection, due-date handling, default progression.
+    /// Stage 8: dynamic company interest is deducted from cash daily (8.1-8.2).
+    /// Fixed company interest continues to accrue for maturity collection (8.3).
+    /// </summary>
     public void DailyTick(BankAccountData account, ModConfig config, IInterestCalculator interestCalc)
     {
         if (account.Loans.Count == 0)
             return;
 
         int today = (int)Game1.stats.DaysPlayed;
-        var loansToCheck = account.Loans.ToList(); // copy for safe iteration
+        var loansToCheck = account.Loans.ToList();
+        bool anyInterestDebt = false;
+        bool anyPrincipalDebt = false;
 
         foreach (var loan in loansToCheck)
         {
-            var company = config.Companies.FirstOrDefault(c => c.Name == loan.CompanyName);
-            if (company is null) continue;
-
-            // === Step 1: Accrue daily interest ===
-            if (loan.Principal > 0)
+            // Frozen loans: no interest, no due date — skip entirely
+            if (loan.IsFrozen)
             {
-                // Recalculate effective weather/luck for today's rate
-                var ctx = BuildContext(company, config);
-                double todayRate = interestCalc.CalculateLoanRate(company, ctx);
-                double weatherDelta = todayRate - company.LoanInterestRate;
-                double dailyRate = Math.Max(0, loan.InterestRate + weatherDelta);
-
-                // Apply penalty rate if in default
-                if (loan.IsInDefault)
-                    dailyRate += config.PenaltyInterestRate;
-
-                int interest = (int)(loan.Principal * dailyRate);
-                if (interest > 0)
-                {
-                    loan.AccumulatedInterest += interest;
-                }
+                anyPrincipalDebt = true; // keeps the warning banner visible
+                continue;
             }
 
-            // === Step 2: Check due date (cash only — player must actively manage repayments) ===
-            bool justEnteredDefault = false;
-            if (loan.DueDay == today && !loan.IsInDefault)
-            {
-                int totalOwed = loan.Principal + loan.AccumulatedInterest;
+            // Resolve company definition: check fixed companies first, then dynamic companies
+            var companyDef = config.Companies.FirstOrDefault(c => c.Name == loan.CompanyName);
+            bool isDynamic = companyDef?.IsDynamic ?? false;
 
-                if (Game1.player.Money >= totalOwed)
+            if (companyDef is null)
+            {
+                // Try to find it via active dynamic companies
+                var dynCompany = account.DynamicCompanies.FirstOrDefault(c => c.CompanyName == loan.CompanyName);
+                if (dynCompany is null) continue;
+
+                isDynamic = true;
+                var cropData = CropDataProvider.GetByCode(dynCompany.CropCode);
+                double r = cropData?.R ?? 0;
+                double depRate = r > 0.20 ? r * 0.5 : r > 0 ? r : 0;
+                double loanRate = r > 0.20 ? r * 0.75 : r > 0 ? r * 1.5 : 0;
+                companyDef = new CompanyDefinition
                 {
-                    // Repay in full from cash only
-                    Game1.player.Money -= totalOwed;
-                    account.Loans.Remove(loan);
-                    continue; // loan removed, skip Step 3
+                    Name = dynCompany.CompanyName,
+                    CropCode = dynCompany.CropCode,
+                    IsDynamic = true,
+                    DepositInterestRate = depRate,
+                    LoanInterestRate = loanRate,
+                    LoanLimit = dynCompany.LoanLimit
+                };
+            }
+
+            // Recalculate effective weather/luck for today's rate
+            var ctx = BuildContext(companyDef, config);
+            double todayBaseRate = interestCalc.CalculateLoanRate(companyDef, ctx);
+            double weatherDelta = todayBaseRate - companyDef.LoanInterestRate;
+            double dailyRate = Math.Max(0, loan.InterestRate + weatherDelta);
+
+            // Apply penalty rate if in default (principal debt)
+            if (loan.IsInDefault)
+                dailyRate += config.PenaltyInterestRate;
+
+            int dailyInterest = (int)(loan.Principal * dailyRate);
+
+            // === Stage 8.1/8.2: Dynamic company — deduct interest from cash daily ===
+            if (isDynamic && dailyInterest > 0)
+            {
+                int collectible = dailyInterest;
+
+                // Also collect overdue interest if simple mode
+                if (loan.OverdueInterest > 0 && !config.UseCompoundInterest)
+                {
+                    collectible += (int)(loan.OverdueInterest * dailyRate);
+                }
+
+                if (Game1.player.Money >= collectible)
+                {
+                    // Cash sufficient: deduct in full
+                    Game1.player.Money -= collectible;
+                    loan.OverdueInterest = 0;
+                    loan.IsInInterestDebt = false;
                 }
                 else
                 {
-                    // Not enough cash → enter grace period
-                    // Player can still manually repay (RepayLoan uses cash + deposits)
+                    // Cash insufficient: deduct what we can
+                    int deducted = Game1.player.Money;
+                    Game1.player.Money = 0;
+                    int unpaid = collectible - deducted;
+
+                    // Allocate unpaid: interest first, then overdue portion
+                    int unpaidBaseInterest = Math.Min(unpaid, dailyInterest);
+                    loan.OverdueInterest += unpaidBaseInterest;
+                    loan.IsInInterestDebt = true;
+                    anyInterestDebt = true;
+                }
+
+                // Compound mode: overdue interest rolls into principal
+                if (loan.IsInInterestDebt && config.UseCompoundInterest && loan.OverdueInterest > 0)
+                {
+                    int compoundInterest = (int)(loan.OverdueInterest * dailyRate);
+                    loan.OverdueInterest += compoundInterest;
+                }
+            }
+            // === Fixed company: accrue interest (original behavior, collected at maturity) ===
+            else if (!isDynamic && dailyInterest > 0)
+            {
+                loan.AccumulatedInterest += dailyInterest;
+            }
+
+            // === Stage 8.3: Due-date handling for all loans ===
+            bool justEnteredDefault = false;
+            if (loan.DueDay == today && !loan.IsInDefault)
+            {
+                int totalOwed = loan.Principal + loan.AccumulatedInterest + loan.OverdueInterest;
+
+                if (Game1.player.Money >= totalOwed)
+                {
+                    // Repay in full from cash
+                    Game1.player.Money -= totalOwed;
+                    account.Loans.Remove(loan);
+                    Game1.chatBox?.addInfoMessage($"贷款到期：{loan.CompanyName} 已自动还款 {totalOwed:N0} g（本金 {loan.Principal:N0} + 利息 {loan.AccumulatedInterest + loan.OverdueInterest:N0}）。");
+                    continue;
+                }
+                else
+                {
+                    // Not enough cash → enter grace period (principal debt)
                     loan.IsInDefault = true;
                     loan.DefaultDaysRemaining = config.PrincipalDebtGraceDays;
                     justEnteredDefault = true;
+                    anyPrincipalDebt = true;
                 }
             }
 
-            // === Step 3: Progress default/grace period ===
-            // Skip on the day default was entered — countdown starts tomorrow
+            // Track principal debt
+            if (loan.IsInDefault)
+                anyPrincipalDebt = true;
+
+            // === Progress default/grace period ===
             if (loan.IsInDefault && !justEnteredDefault)
             {
                 loan.DefaultDaysRemaining--;
@@ -211,46 +328,63 @@ public class LoanService : ILoanService
                 if (loan.DefaultDaysRemaining <= 0)
                 {
                     // Grace period expired — force deduction from cash + all deposits
-                    int totalOwed = loan.Principal + loan.AccumulatedInterest;
-                    int available = GetTotalAvailableFunds(account);
+                    int totalOwed = loan.Principal + loan.AccumulatedInterest + loan.OverdueInterest;
+                    int totalAvailable = Game1.player.Money + account.CompanyAccounts.Sum(a => a.DepositBalance);
 
-                    if (available > 0)
+                    if (totalAvailable < totalOwed)
                     {
-                        int deducted = Math.Min(available, totalOwed);
-                        CollectFunds(account, loan.CompanyName, deducted);
-
-                        // Apply deduction: interest first, then principal
-                        int interestDeducted = Math.Min(deducted, loan.AccumulatedInterest);
-                        loan.AccumulatedInterest -= interestDeducted;
-                        loan.Principal -= (deducted - interestDeducted);
-                    }
-
-                    // Reset grace counter for next cycle if still has debt
-                    if (loan.Principal > 0 || loan.AccumulatedInterest > 0)
-                    {
-                        loan.DefaultDaysRemaining = config.PrincipalDebtGraceDays;
+                        // All assets insufficient → freeze loan (no new interest, no due date), enter bankruptcy
+                        // Interest amounts preserved — only income garnishment + borrow block apply
+                        loan.IsFrozen = true;
+                        loan.IsInDefault = false;
+                        account.IsInBankruptcy = true;
+                        account.BankruptcyWarningShown = false;
+                        anyPrincipalDebt = true;
                     }
                     else
                     {
-                        account.Loans.Remove(loan);
+                        int collected = CollectFundsOrdered(account, loan, totalOwed, config);
+
+                        int remaining = collected;
+                        int overdueDeducted = Math.Min(remaining, loan.OverdueInterest);
+                        loan.OverdueInterest -= overdueDeducted;
+                        remaining -= overdueDeducted;
+
+                        int interestDeducted = Math.Min(remaining, loan.AccumulatedInterest);
+                        loan.AccumulatedInterest -= interestDeducted;
+                        remaining -= interestDeducted;
+
+                        loan.Principal -= remaining;
+
+                        if (loan.OverdueInterest <= 0)
+                            loan.IsInInterestDebt = false;
+
+                        if (loan.Principal > 0 || loan.AccumulatedInterest > 0 || loan.OverdueInterest > 0)
+                        {
+                            loan.DefaultDaysRemaining = config.PrincipalDebtGraceDays;
+                            Game1.chatBox?.addInfoMessage($"强制划扣：{loan.CompanyName} 贷款已从存款扣除 {collected:N0} g，剩余应还 {loan.Principal + loan.AccumulatedInterest + loan.OverdueInterest:N0} g。");
+                        }
+                        else
+                        {
+                            account.Loans.Remove(loan);
+                            Game1.chatBox?.addInfoMessage($"强制划扣：{loan.CompanyName} 贷款已全部清偿（共扣 {collected:N0} g），贷款已结清。");
+                        }
                     }
                 }
             }
         }
-    }
 
-    /// <summary>Total funds available for repayment: cash + all company deposits.</summary>
-    private static int GetTotalAvailableFunds(BankAccountData account)
-    {
-        return Game1.player.Money + account.CompanyAccounts.Sum(a => a.DepositBalance);
+        // Update global debt flags
+        account.IsInInterestDebt = anyInterestDebt;
+        account.IsInPrincipalDebt = anyPrincipalDebt;
     }
 
     /// <summary>
-    /// Collect funds from player for loan repayment.
-    /// Priority: cash on hand → same-company deposit → other company deposits.
+    /// Collect funds from player for forced loan repayment during grace expiry.
+    /// Priority: cash → same-company deposit → other deposits (lowest interest rate first).
     /// Mutates player gold and deposit balances.
     /// </summary>
-    private static void CollectFunds(BankAccountData account, string companyName, int amountNeeded)
+    private static int CollectFundsOrdered(BankAccountData account, LoanRecord loan, int amountNeeded, ModConfig config)
     {
         int remaining = amountNeeded;
 
@@ -258,29 +392,41 @@ public class LoanService : ILoanService
         int cashUsed = Math.Min(Game1.player.Money, remaining);
         Game1.player.Money -= cashUsed;
         remaining -= cashUsed;
-        if (remaining <= 0) return;
+        if (remaining <= 0) return amountNeeded;
 
         // 2. Same-company deposit first
-        var sameCompany = account.CompanyAccounts.FirstOrDefault(a => a.CompanyName == companyName);
+        var sameCompany = account.CompanyAccounts.FirstOrDefault(a => a.CompanyName == loan.CompanyName);
         if (sameCompany is not null && sameCompany.DepositBalance > 0)
         {
             int fromSame = Math.Min(sameCompany.DepositBalance, remaining);
             sameCompany.DepositBalance -= fromSame;
             sameCompany.BaseAmount = Math.Max(0, sameCompany.BaseAmount - fromSame);
             remaining -= fromSame;
-            if (remaining <= 0) return;
+            if (remaining <= 0) return amountNeeded;
         }
 
-        // 3. Other company deposits
-        foreach (var ca in account.CompanyAccounts)
+        // 3. Other company deposits — low interest rate accounts first
+        var others = account.CompanyAccounts
+            .Where(a => a.CompanyName != loan.CompanyName && a.DepositBalance > 0)
+            .OrderBy(a => GetDepositRate(a, config))
+            .ToList();
+
+        foreach (var ca in others)
         {
-            if (ca.CompanyName == companyName || ca.DepositBalance <= 0) continue;
             int fromOther = Math.Min(ca.DepositBalance, remaining);
             ca.DepositBalance -= fromOther;
             ca.BaseAmount = Math.Max(0, ca.BaseAmount - fromOther);
             remaining -= fromOther;
             if (remaining <= 0) break;
         }
+
+        return amountNeeded - remaining;
+    }
+
+    private static double GetDepositRate(CompanyAccount ca, ModConfig config)
+    {
+        var company = config.Companies.FirstOrDefault(c => c.Name == ca.CompanyName);
+        return company?.DepositInterestRate ?? 0.05;
     }
 
     private static InterestCalculationContext BuildContext(CompanyDefinition company, ModConfig config)

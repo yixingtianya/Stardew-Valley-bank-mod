@@ -1,13 +1,21 @@
-using BankMod.Domain;
+using BankMod.Data;
 
 namespace BankMod.Services.Abstractions;
 
-/// <summary>计划中（P2）：检测破产条件、执行清算和强制划扣。</summary>
+/// <summary>Detects and manages bankruptcy: eligibility check, state transitions, shipping income garnishment.</summary>
 public interface IBankruptcyHandler
 {
-    /// <summary>检查所有公司是否满足破产条件。</summary>
-    void Check();
+    /// <summary>
+    /// Check bankruptcy conditions after daily interest/loan processing.
+    /// Conditions: player cash < total owed AND total deposits < total owed.
+    /// If met: enters bankruptcy state (interest frozen, borrow/withdraw blocked).
+    /// If cleared: exits bankruptcy state.
+    /// </summary>
+    void CheckBankruptcy(BankAccountData account, ModConfig config);
 
-    /// <summary>强制执行破产清算。</summary>
-    void Liquidate(CompanyId companyId);
+    /// <summary>
+    /// During bankruptcy, deduct a percentage of daily shipping income toward debt.
+    /// Returns the amount deducted.
+    /// </summary>
+    int ApplyShippingIncomeDeduction(BankAccountData account, ModConfig config, int shippingIncome);
 }

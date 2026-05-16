@@ -31,6 +31,9 @@ public class ModServices
     // 当前会话是否已收到银行欢迎信（GivePhoneToPlayer 设置）
     public bool HasReceivedPhoneInSession { get; set; }
 
+    // Stage 8 bankruptcy: exempt next money increase from garnishment (bank withdrawal)
+    public bool ExemptNextMoneyIncrease { get; set; }
+
     public ModServices(IModHelper helper, Data.ModConfig config, IMonitor monitor)
     {
         Monitor = monitor;
@@ -45,14 +48,15 @@ public class ModServices
         LoanService = new LoanService();
         ShipmentTracking = new ShipmentTrackingService();
         FuelService = new FuelService(BankAccountService);
+        BankruptcyHandler = new BankruptcyHandler();
 
         CompanyManager = new CompanyManager(
             fixedInterestCalc, dynamicInterestCalc,
             BankAccountService, LoanService,
+            BankruptcyHandler,
             ShipmentTracking, FuelService,
             config, monitor);
 
-        BankruptcyHandler = new BankruptcyHandler();
         CreditLimitService = new CreditLimitService();
         MessageScheduler = new MessageScheduler();
         SeasonalFruitMarket = new SeasonalFruitMarket();

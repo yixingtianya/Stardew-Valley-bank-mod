@@ -38,7 +38,7 @@ public class FuelService : IFuelService
 
         company.FuelStock += fpGain;
 
-        int smaxFP = (int)(cropData.Smax * FPPerCrop);
+        int smaxFP = (int)(cropData.Smax * FPPerCrop * 2); // cap at 200% of Smax
         if (company.FuelStock > smaxFP)
             company.FuelStock = smaxFP;
     }

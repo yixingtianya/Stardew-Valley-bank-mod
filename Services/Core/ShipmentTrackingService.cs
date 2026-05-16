@@ -49,7 +49,7 @@ public class ShipmentTrackingService
             monitor.Log($"[ShipmentTracking] {cropCode}: +{quantity} (cumulative={tracking.CumulativeSellCount})", LogLevel.Debug);
 
             // Record fuel points for the shipping bin sale
-            int quality = item is StardewValley.Object obj ? obj.Quality : 0;
+            int quality = item is StardewValley.Object o ? o.Quality : 0;
             fuelService.RecordShippingBinSale(account, cropCode, quantity, quality);
         }
     }

@@ -23,4 +23,7 @@ public interface ICompanyManager
 
     /// <summary>Apply competitor suppression when crops are sold at shops (Stage 7.3).</summary>
     void ApplySuppression(BankAccountData account, string cropCode, int quantity);
+
+    /// <summary>Stage 9: Rescue investment during pre-bankruptcy grace period. Returns true on success.</summary>
+    bool RescueInvest(BankAccountData account, string companyName, int amount);
 }

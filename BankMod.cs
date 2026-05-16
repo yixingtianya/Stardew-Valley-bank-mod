@@ -7,6 +7,7 @@ using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
 using StardewModdingAPI;
 using StardewModdingAPI.Events;
+using System.IO;
 using StardewValley;
 using StardewValley.GameData.Objects;
 using StardewValley.Menus;
@@ -44,6 +45,10 @@ internal sealed class BankMod : Mod
 #pragma warning restore CS0169
     private Dictionary<string, int>? _preShopInventory; // Stage 7.3 shop sale detection
     private bool _shopIsJoja; // 记录当前商店是否为 Joja
+    private int _lastMoneySnapshot;
+    private int _bankruptGarnishCooldown;
+    private bool _bankruptExitMessageShown;
+    private bool _wasBankruptThisSession;
     private bool _pendingPierreMail;
     private bool _pendingMorrisMail;
     private readonly Vector2 _jojaMarkerTile = new(27, 7); // JojaMart supply shelf
@@ -88,12 +93,19 @@ internal sealed class BankMod : Mod
         helper.Events.Display.MenuChanged += OnMenuChanged;
         helper.Events.Player.InventoryChanged += OnInventoryChanged;
         helper.Events.Display.RenderedWorld += OnRenderedWorld;
+        helper.Events.Display.RenderedHud += OnRenderedHud;
         helper.Events.Input.ButtonPressed += OnButtonPressed;
         helper.Events.Content.AssetRequested += OnAssetRequested;
 
         // V3.3 联机基础架构埋点
         helper.Events.Multiplayer.PeerConnected += OnPeerConnected;
         helper.Events.Multiplayer.ModMessageReceived += OnModMessageReceived;
+
+        // Stage 10: TV financial channel Harmony patches
+        var tvHarmony = new HarmonyLib.Harmony("bankmod.tv");
+        tvHarmony.PatchAll(typeof(Patches.TVPatch).Assembly);
+        Patches.FbnNewsGenerator.Initialize(_services, _config);
+        Monitor.Log("[TV] FBN channel Harmony patches applied", LogLevel.Debug);
 
         _lastLocationName = null;
 
@@ -141,6 +153,9 @@ internal sealed class BankMod : Mod
         var account = _services.BankAccountService.Load();
         _services.ShipmentTracking.ProcessShipments(account, _services.FuelService, Monitor);
         _services.BankAccountService.Save(account);
+
+        // Snapshot money before overnight shipping income is added
+        _lastMoneySnapshot = Game1.player.Money;
     }
 
     private void OnAssetRequested(object? sender, AssetRequestedEventArgs e)
@@ -148,6 +163,15 @@ internal sealed class BankMod : Mod
         if (e.NameWithoutLocale.IsEquivalentTo(PhoneItem.TextureAssetName))
         {
             e.LoadFrom(() => CreatePhoneSprite(), AssetLoadPriority.Medium);
+        }
+
+        if (e.NameWithoutLocale.IsEquivalentTo("Mods/BankMod/FBNScreen"))
+        {
+            e.LoadFrom(() =>
+            {
+                string path = Path.Combine(Helper.DirectoryPath, "assets", "TV3.png");
+                return File.Exists(path) ? Texture2D.FromFile(Game1.graphics.GraphicsDevice, path) : null;
+            }, AssetLoadPriority.Medium);
         }
 
         if (e.NameWithoutLocale.IsEquivalentTo("Data/Objects"))
@@ -445,38 +469,54 @@ internal sealed class BankMod : Mod
             name: () => "破产收入扣除比例 (%)", tooltip: () => "推荐 50%",
             min: 20, max: 80, interval: 5);
 
-        // ============== 债券交易 ==============
-        gmcm.AddSectionTitle(ModManifest, () => "债券交易（倒闭机制）", () => "公司濒临破产的条件和债务转移参数");
-        gmcm.AddNumberOption(ModManifest,
-            getValue: () => _config.BankruptcyNoTradeDays,
-            setValue: val => _config.BankruptcyNoTradeDays = val,
-            name: () => "倒闭：无交易天数", tooltip: () => "推荐 14 天",
-            min: 7, max: 28, interval: 1);
-        gmcm.AddNumberOption(ModManifest,
-            getValue: () => _config.BankruptcyRateNegativeDays,
-            setValue: val => _config.BankruptcyRateNegativeDays = val,
-            name: () => "倒闭：利率负值天数", tooltip: () => "推荐 5 天",
-            min: 3, max: 14, interval: 1);
-        gmcm.AddNumberOption(ModManifest,
-            getValue: () => _config.BankruptcyDepositThreshold,
-            setValue: val => _config.BankruptcyDepositThreshold = val,
-            name: () => "倒闭：存款枯竭阈值 (g)", tooltip: () => "推荐 5,000g",
-            min: 0, max: 50000, interval: 1000);
-        gmcm.AddNumberOption(ModManifest,
-            getValue: () => _config.PreBankruptcyGraceDays,
-            setValue: val => _config.PreBankruptcyGraceDays = val,
-            name: () => "濒临破产宽限期 (天)", tooltip: () => "推荐 3 天",
-            min: 1, max: 7, interval: 1);
+        // ============== 债券交易（阶段九） ==============
+        gmcm.AddSectionTitle(ModManifest, () => "债券交易与清算（阶段九）", () => "公司燃料耗尽倒闭时的债券转移和阶梯清算参数");
         gmcm.AddNumberOption(ModManifest,
             getValue: () => (int)(_config.DebtTransferRateDiscount * 100),
             setValue: val => _config.DebtTransferRateDiscount = val / 100f,
             name: () => "债务转移利率折扣 (%)", tooltip: () => "推荐 50%",
-            min: 30, max: 70, interval: 5);
+            min: 10, max: 90, interval: 5);
         gmcm.AddNumberOption(ModManifest,
             getValue: () => _config.DebtTransferNewRepaymentDays,
             setValue: val => _config.DebtTransferNewRepaymentDays = val,
             name: () => "债务转移新还款周期 (天)", tooltip: () => "推荐 28 天",
             min: 14, max: 56, interval: 7);
+        gmcm.AddNumberOption(ModManifest,
+            getValue: () => (int)(_config.ProsperousReturnRate * 100),
+            setValue: val => _config.ProsperousReturnRate = val / 100f,
+            name: () => "清算返还：繁荣期 (%)", tooltip: () => "推荐 80%",
+            min: 0, max: 100, interval: 5);
+        gmcm.AddNumberOption(ModManifest,
+            getValue: () => (int)(_config.StableReturnRate * 100),
+            setValue: val => _config.StableReturnRate = val / 100f,
+            name: () => "清算返还：稳定期 (%)（≤繁荣期）", tooltip: () => "推荐 50%",
+            min: 0, max: 100, interval: 5);
+        gmcm.AddSectionTitle(ModManifest, () => "贷款上限乘数（阶段九）", () => "值÷10=实际乘数。默认：繁荣10(×1.0) 稳定9(×0.9) 饥饿6(×0.6) 濒死3(×0.3)");
+        gmcm.AddNumberOption(ModManifest,
+            getValue: () => _config.ProsperousLoanLimitMult,
+            setValue: val => _config.ProsperousLoanLimitMult = val,
+            name: () => "繁荣期贷款上限乘数", tooltip: () => "默认 10（×1.0）",
+            min: 1, max: 20, interval: 1);
+        gmcm.AddNumberOption(ModManifest,
+            getValue: () => _config.StableLoanLimitMult,
+            setValue: val => _config.StableLoanLimitMult = val,
+            name: () => "稳定期贷款上限乘数", tooltip: () => "默认 9（×0.9）",
+            min: 1, max: 20, interval: 1);
+        gmcm.AddNumberOption(ModManifest,
+            getValue: () => _config.HungryLoanLimitMult,
+            setValue: val => _config.HungryLoanLimitMult = val,
+            name: () => "饥饿期贷款上限乘数", tooltip: () => "默认 6（×0.6）",
+            min: 1, max: 20, interval: 1);
+        gmcm.AddNumberOption(ModManifest,
+            getValue: () => _config.DyingLoanLimitMult,
+            setValue: val => _config.DyingLoanLimitMult = val,
+            name: () => "濒死期贷款上限乘数", tooltip: () => "默认 3（×0.3）",
+            min: 1, max: 20, interval: 1);
+        gmcm.AddNumberOption(ModManifest,
+            getValue: () => (int)(_config.RescueInvestmentCapRatio * 100),
+            setValue: val => _config.RescueInvestmentCapRatio = val / 100f,
+            name: () => "入股救市上限（贷款上限×比例）", tooltip: () => "推荐 50%",
+            min: 10, max: 100, interval: 5);
 
         // ============== 借款上限 ==============
         gmcm.AddSectionTitle(ModManifest, () => "借款上限（全局）", () => "借款上限 = min(净资产×杠杆系数, 硬封顶)");
@@ -485,11 +525,6 @@ internal sealed class BankMod : Mod
             setValue: val => _config.BorrowingLeverageCoefficient = val / 100f,
             name: () => "借款杠杆系数 (%)", tooltip: () => "推荐 200%",
             min: 100, max: 500, interval: 50);
-        gmcm.AddNumberOption(ModManifest,
-            getValue: () => _config.BorrowingHardCap,
-            setValue: val => _config.BorrowingHardCap = val,
-            name: () => "借款硬封顶 (g)", tooltip: () => "推荐 500,000g",
-            min: 100000, max: 2000000, interval: 100000);
         gmcm.AddNumberOption(ModManifest,
             getValue: () => (int)(_config.FixedCompanyQuotaRatio * 100),
             setValue: val => _config.FixedCompanyQuotaRatio = val / 100f,
@@ -589,6 +624,7 @@ internal sealed class BankMod : Mod
 
         _phoneReceivedToday = false;
         _lastReadMail = null;
+        _lastMoneySnapshot = Game1.player?.Money ?? 0;
         _morrisEventSeen = Helper.Data.ReadSaveData<string>("bankmod_morris_event_seen") == "1";
         string? phoneFlag = Helper.Data.ReadSaveData<string>(PhoneReceivedFlag);
         _hasReceivedPhoneInSession = (phoneFlag == "1");
@@ -614,6 +650,20 @@ internal sealed class BankMod : Mod
         }
 
         Monitor.Log("New day started", LogLevel.Info);
+
+        // Stage 8: Check overnight money gain (shipping income) for bankruptcy deduction
+        var account = _services.BankAccountService.Load();
+        if (account.IsInBankruptcy && Game1.player.Money > _lastMoneySnapshot)
+        {
+            int overnightGain = Game1.player.Money - _lastMoneySnapshot;
+            int actualDeducted = _services.BankruptcyHandler.ApplyShippingIncomeDeduction(account, _config, overnightGain);
+            if (actualDeducted > 0)
+            {
+                _services.BankAccountService.Save(account);
+                Game1.chatBox?.addInfoMessage($"破产偿债：过夜出货收入 {overnightGain:N0}g 扣除 {actualDeducted:N0}g（{_config.BankruptcyIncomeDeduction * 100:F0}%）");
+                Monitor.Log($"[Bankruptcy] Overnight: deducted {actualDeducted}g from {overnightGain}g shipping income", LogLevel.Info);
+            }
+        }
 
         DumpMailDebugInfo();
 
@@ -645,6 +695,9 @@ internal sealed class BankMod : Mod
 
         // Delegate daily settlement to CompanyManager
         _services.CompanyManager.OnDayStarted();
+
+        // Snapshot money for bankruptcy garnishment tracking
+        _lastMoneySnapshot = Game1.player.Money;
     }
 
     private void OnMenuChanged(object? sender, MenuChangedEventArgs e)
@@ -820,6 +873,37 @@ internal sealed class BankMod : Mod
             0f, Vector2.Zero, 2f, Microsoft.Xna.Framework.Graphics.SpriteEffects.None, 1f);
     }
 
+    private void OnRenderedHud(object? sender, RenderedHudEventArgs e)
+    {
+        if (!Context.IsWorldReady || Game1.player is null)
+            return;
+
+        var account = _services.BankAccountService.Load();
+
+        if (account.IsInBankruptcy)
+        {
+            _wasBankruptThisSession = true;
+            _bankruptExitMessageShown = false;
+            const string banner = "星露谷永远有下一个春天，但现实需要你亲手耕耘每一个明天。";
+            Vector2 size = Game1.dialogueFont.MeasureString(banner);
+            float x = Game1.uiViewport.Width - size.X - 20;
+            float y = Game1.uiViewport.Height - size.Y - 12;
+
+            // Dark background bar
+            var bgRect = new Rectangle((int)x - 12, (int)y - 6, (int)size.X + 24, (int)size.Y + 12);
+            Game1.spriteBatch.Draw(Game1.staminaRect, bgRect, Color.Black * 0.7f);
+
+            Utility.drawTextWithShadow(Game1.spriteBatch, banner, Game1.dialogueFont,
+                new Vector2(x, y), Color.Gold);
+        }
+        else if (_wasBankruptThisSession && !_bankruptExitMessageShown)
+        {
+            _bankruptExitMessageShown = true;
+            _wasBankruptThisSession = false;
+            Game1.chatBox?.addInfoMessage("恭喜，享受你的春天吧！");
+        }
+    }
+
     private void OnButtonPressed(object? sender, ButtonPressedEventArgs e)
     {
         if (!Context.IsWorldReady) return;
@@ -980,6 +1064,33 @@ internal sealed class BankMod : Mod
                 _lastReadMail = "BankMod_Letter";
             }
         }
+
+        // Stage 8 bankruptcy: garnish non-withdrawal money gains
+        var account = _services.BankAccountService.Load();
+        if (account.IsInBankruptcy && Game1.player.Money > _lastMoneySnapshot)
+        {
+            int increase = Game1.player.Money - _lastMoneySnapshot;
+            if (_services.ExemptNextMoneyIncrease)
+            {
+                _services.ExemptNextMoneyIncrease = false;
+            }
+            else
+            {
+                int actualDeducted = _services.BankruptcyHandler.ApplyShippingIncomeDeduction(account, _config, increase);
+                if (actualDeducted > 0)
+                {
+                    _services.BankAccountService.Save(account);
+                    if (_bankruptGarnishCooldown <= 0)
+                    {
+                        Game1.chatBox?.addInfoMessage($"破产偿债：收入 {increase:N0}g 扣除 {actualDeducted:N0}g（{_config.BankruptcyIncomeDeduction * 100:F0}%）");
+                        _bankruptGarnishCooldown = 60; // ~1 second cooldown to avoid spam
+                    }
+                }
+            }
+        }
+        if (_bankruptGarnishCooldown > 0)
+            _bankruptGarnishCooldown--;
+        _lastMoneySnapshot = Game1.player.Money;
 
     }
 

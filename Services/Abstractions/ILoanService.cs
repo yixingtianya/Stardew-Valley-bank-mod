@@ -8,8 +8,11 @@ public interface ILoanService
     /// <summary>Get all active loans for the player.</summary>
     IReadOnlyList<LoanRecord> GetLoans(BankAccountData account);
 
-    /// <summary>Get the active loan for a specific company, or null if none.</summary>
+    /// <summary>Get the first active loan for a specific company, or null if none.</summary>
     LoanRecord? GetLoan(BankAccountData account, string companyName);
+
+    /// <summary>Get all independent loans for a specific company.</summary>
+    IReadOnlyList<LoanRecord> GetCompanyLoans(BankAccountData account, string companyName);
 
     /// <summary>
     /// Issue a new loan or top up an existing one for the given company.

@@ -13,7 +13,7 @@ namespace BankMod.UI;
 internal class BankMenu : IClickableMenu
 {
     private const int WindowWidth = 600;
-    private const int WindowHeight = 680;
+    private const int WindowHeight = 820;
 
     private readonly BankAccountData _account;
     private readonly ModConfig _config;
@@ -34,13 +34,20 @@ internal class BankMenu : IClickableMenu
     private readonly ClickableTextureComponent _borrow7Btn;
     private readonly ClickableTextureComponent _borrow14Btn;
     private readonly ClickableTextureComponent _repayBtn;
+    private readonly ClickableTextureComponent _rescueBtn;
+    private readonly ClickableTextureComponent _loanDetailBtn;
+    private readonly List<ClickableTextureComponent> _loanRepayBtns = new();
     private bool _hoverDeposit;
     private bool _hoverWithdraw;
     private bool _hoverBorrow7;
     private bool _hoverBorrow14;
     private bool _hoverRepay;
+    private bool _hoverRescue;
+    private bool _hoverLoanDetail;
     private Rectangle _depositRateBounds;
     private Rectangle _loanRateBounds;
+    private bool _showLoanDetail;
+    private int _loanScrollOffset;
 
     public BankMenu(BankAccountData account, ModConfig config, IModHelper helper, ModServices services, int selectedTab = 0)
         : base(
@@ -66,6 +73,8 @@ internal class BankMenu : IClickableMenu
             Game1.mouseCursors, new Rectangle(337, 494, 12, 12), 3f
         );
 
+        bool hasWarning = account.IsInBankruptcy || account.IsInPrincipalDebt || account.IsInInterestDebt;
+
         int tabStartX = xPositionOnScreen + 30;
         int tabY = yPositionOnScreen + 62;
         int tabHeight = 30;
@@ -81,8 +90,8 @@ internal class BankMenu : IClickableMenu
 
         // Buttons: deposit/withdraw on top row, borrow/repay on bottom row
         int centerX = xPositionOnScreen + width / 2;
-        int btnY1 = yPositionOnScreen + height - 100;
-        int btnY2 = yPositionOnScreen + height - 50;
+        int btnY1 = yPositionOnScreen + height - 90;
+        int btnY2 = yPositionOnScreen + height - 40;
         int btnW = 130;
         int btnH = 40;
         int gap = 10;
@@ -103,9 +112,17 @@ internal class BankMenu : IClickableMenu
             new Rectangle(centerX + btnW + gap * 2, btnY1, btnW, btnH),
             Game1.mouseCursors, new Rectangle(128, 384, 64, 64), 1f
         );
-        // Bottom row: repay (centered)
+        // Bottom row: repay (centered), loan detail toggle
         _repayBtn = new ClickableTextureComponent(
-            new Rectangle(centerX - btnW / 2, btnY2, btnW, btnH),
+            new Rectangle(centerX - btnW - gap / 2, btnY2, btnW, btnH),
+            Game1.mouseCursors, new Rectangle(128, 384, 64, 64), 1f
+        );
+        _loanDetailBtn = new ClickableTextureComponent(
+            new Rectangle(centerX + gap / 2, btnY2, btnW, btnH),
+            Game1.mouseCursors, new Rectangle(128, 384, 64, 64), 1f
+        );
+        _rescueBtn = new ClickableTextureComponent(
+            new Rectangle(centerX - btnW * 2 - gap * 2, btnY2, btnW, btnH),
             Game1.mouseCursors, new Rectangle(128, 384, 64, 64), 1f
         );
     }
@@ -157,13 +174,41 @@ internal class BankMenu : IClickableMenu
         b.Draw(Game1.fadeToBlackRect, Game1.graphics.GraphicsDevice.Viewport.Bounds, Color.Black * 0.5f);
         Game1.drawDialogueBox(xPositionOnScreen, yPositionOnScreen, width, height, false, true);
 
+        // Title (moved up to make room for warning)
         string title = "Dynamic Finance Company System";
         Vector2 titleSize = Game1.dialogueFont.MeasureString(title);
         Utility.drawTextWithShadow(
             b, title, Game1.dialogueFont,
-            new Vector2(xPositionOnScreen + (width - titleSize.X) / 2, yPositionOnScreen + 22),
+            new Vector2(xPositionOnScreen + (width - titleSize.X) / 2, yPositionOnScreen + 10),
             Game1.textColor
         );
+
+        // Stage 8: Warning banner between title and divider
+        string warnText = "";
+        Color warnColor = Color.Red;
+        if (_account.IsInBankruptcy)
+        {
+            warnText = "⚠ 破产保护 — 逾期贷款已冻结(0利息)，借款暂停，出货收入50%强制偿债";
+            warnColor = Color.Red;
+        }
+        else if (_account.IsInPrincipalDebt)
+        {
+            warnText = "⚠ 贷款逾期 — 宽限期结束后将从存款强制划扣";
+            warnColor = Color.Red;
+        }
+        else if (_account.IsInInterestDebt)
+        {
+            warnText = "⚠ 利息欠债 — 现金不足支付贷款日息，逾期利息持续累积";
+            warnColor = Color.Red;
+        }
+
+        if (warnText.Length > 0)
+        {
+            Vector2 warnSize = Game1.smallFont.MeasureString(warnText);
+            Utility.drawTextWithShadow(b, warnText, Game1.smallFont,
+                new Vector2(xPositionOnScreen + (width - warnSize.X) / 2, yPositionOnScreen + 34),
+                warnColor);
+        }
 
         b.Draw(Game1.staminaRect, new Rectangle(xPositionOnScreen + 30, yPositionOnScreen + 52, width - 60, 2), Color.Gray);
 
@@ -212,7 +257,8 @@ internal class BankMenu : IClickableMenu
                     CompanyStatus.Prosperous => ("[繁荣]", Color.Gold),
                     CompanyStatus.Stable => ("[稳定运营]", Color.LimeGreen),
                     CompanyStatus.Hungry => ("[燃料不足·饥饿]", Color.Orange),
-                    CompanyStatus.Dying => ("[濒危]", Color.Red),
+                    CompanyStatus.Dying => (dyn.RestructuringDaysRemaining > 0
+                        ? $"[重组期·剩 {dyn.RestructuringDaysRemaining} 天]" : "[濒危]", Color.Red),
                     CompanyStatus.Protection => ("[濒死保护期]", Color.Red),
                     _ => ("", Color.Gray)
                 };
@@ -227,9 +273,9 @@ internal class BankMenu : IClickableMenu
                 if (cropData is not null)
                 {
                     double displayFuel = dyn.FuelStock / 10.0;
-                    double smaxDisplay = cropData.Smax;
-                    double fuelRatio = smaxDisplay > 0 ? displayFuel / smaxDisplay * 100 : 0;
+                    double smaxDisplay = cropData.Smax * 2;
                     double dailyDemand = cropData.DBase;
+
                     double statusCoefficient = dyn.Status switch
                     {
                         CompanyStatus.Prosperous => 1.0,
@@ -241,12 +287,14 @@ internal class BankMenu : IClickableMenu
                         _ => 0.8
                     };
                     double dailyConsumption = dailyDemand * statusCoefficient;
+                    double daysOfFuel = dailyConsumption > 0 ? displayFuel / dailyConsumption : 999;
+                    double satisfactionPct = smaxDisplay > 0 ? displayFuel / smaxDisplay * 100 : 0;
 
-                    Color fuelColor = fuelRatio > 60 ? Color.LimeGreen : fuelRatio > 30 ? Color.Orange : Color.Red;
-                    DrawInfoLine(b, $"燃料库存：{displayFuel:F1} / {smaxDisplay:F0} ({fuelRatio:F0}%)", infoX + 20, infoY + lineH * (lineOffset + 1), fuelColor);
-                    lineOffset++;
+                    Color fuelColor = satisfactionPct > 150 ? Color.LimeGreen : satisfactionPct >= 80 ? Color.Lime : satisfactionPct >= 30 ? Color.Orange : Color.Red;
                     string cropUnit = cropData.DisplayName;
-                    DrawInfoLine(b, $"日消耗：≈{dailyConsumption:F1} 个{cropUnit}/天", infoX + 20, infoY + lineH * (lineOffset + 1), Color.Gray);
+                    DrawInfoLine(b, $"燃料库存：{displayFuel:F1} / {smaxDisplay:F0} 个{cropUnit}（够烧 {daysOfFuel:F1} 天）", infoX + 20, infoY + lineH * (lineOffset + 1), fuelColor);
+                    lineOffset++;
+                    DrawInfoLine(b, $"日消耗：≈{dailyConsumption:F1} 个{cropUnit}/天（基础 {dailyDemand:F1} × {statusCoefficient:F2}）", infoX + 20, infoY + lineH * (lineOffset + 1), Color.Gray);
                     lineOffset++;
                 }
             }
@@ -287,28 +335,173 @@ internal class BankMenu : IClickableMenu
         int loanY = infoY + lineH * (lineOffset + 9);
         b.Draw(Game1.staminaRect, new Rectangle(infoX, loanY - 4, width - 80, 2), Color.Gray * 0.5f);
 
-        if (loan is not null)
+        var companyLoans = _loanService.GetCompanyLoans(_account, CurrentCompany.Name);
+
+        if (!_showLoanDetail)
         {
-            int today = (int)Game1.stats.DaysPlayed;
-            int daysLeft = loan.DueDay - today;
+            // === Summary view: show first loan details (original behavior) ===
+            if (loan is not null)
+            {
+                int today = (int)Game1.stats.DaysPlayed;
+                int daysLeft = loan.DueDay - today;
 
-            DrawInfoLine(b, $"贷款本金：{loan.Principal:N0} g", infoX + 20, loanY, Color.DarkRed);
-            DrawInfoLine(b, $"累计未还利息：{loan.AccumulatedInterest:N0} g", infoX + 20, loanY + lineH, Color.Red);
-            DrawInfoLine(b, $"贷款日利率：{loan.InterestRate * 100:F3}%/天", infoX + 20, loanY + lineH * 2, Color.DimGray);
-            DrawInfoLine(b, $"还款周期：{loan.RepaymentPeriodDays} 天", infoX + 20, loanY + lineH * 3, Color.DimGray);
+                string summary = companyLoans.Count > 1 ? $"（共 {companyLoans.Count} 笔贷款）" : "";
+                DrawInfoLine(b, $"贷款本金：{companyLoans.Sum(l => l.Principal):N0} g {summary}", infoX + 20, loanY, Color.DarkRed);
+                DrawInfoLine(b, $"累计未还利息：{companyLoans.Sum(l => l.AccumulatedInterest):N0} g", infoX + 20, loanY + lineH, Color.Red);
 
-            Color dueColor = loan.IsInDefault ? Color.Red : (daysLeft <= 2 ? Color.DarkOrange : Color.DimGray);
-            string dueStr = loan.IsInDefault
-                ? $"逾期中！宽限期剩余 {loan.DefaultDaysRemaining} 天"
-                : $"距还款日：{daysLeft} 天 (第 {loan.DueDay} 天)";
-            DrawInfoLine(b, dueStr, infoX + 20, loanY + lineH * 4, dueColor);
+                int nextLine = 2;
+                int totalOverdue = companyLoans.Sum(l => l.OverdueInterest);
+                if (totalOverdue > 0)
+                {
+                    DrawInfoLine(b, $"逾期欠息：{totalOverdue:N0} g", infoX + 20, loanY + lineH * nextLine, Color.DarkRed);
+                    nextLine++;
+                }
 
-            int totalOwed = loan.Principal + loan.AccumulatedInterest;
-            DrawInfoLine(b, $"应还总额：{totalOwed:N0} g", infoX + 20, loanY + lineH * 5, Color.OrangeRed);
+                DrawInfoLine(b, $"贷款日利率：{loan.InterestRate * 100:F3}%/天", infoX + 20, loanY + lineH * nextLine, Color.DimGray);
+                nextLine++;
+                DrawInfoLine(b, $"还款周期：{loan.RepaymentPeriodDays} 天", infoX + 20, loanY + lineH * nextLine, Color.DimGray);
+                nextLine++;
+
+                Color dueColor;
+                string dueStr;
+                if (companyLoans.Any(l => l.IsFrozen))
+                {
+                    dueColor = Color.Red;
+                    dueStr = "⚠ 已冻结 — 资产不足，无限期0利息，请尽快还款";
+                }
+                else if (loan.IsInDefault)
+                {
+                    dueColor = Color.Red;
+                    dueStr = $"逾期中！宽限期剩余 {loan.DefaultDaysRemaining} 天";
+                }
+                else
+                {
+                    dueColor = daysLeft <= 2 ? Color.DarkOrange : Color.DimGray;
+                    dueStr = $"距还款日：{daysLeft} 天 (第 {loan.DueDay} 天)";
+                }
+                DrawInfoLine(b, dueStr, infoX + 20, loanY + lineH * nextLine, dueColor);
+                nextLine++;
+
+                int totalOwed = companyLoans.Sum(l => l.Principal + l.AccumulatedInterest + l.OverdueInterest);
+                DrawInfoLine(b, $"应还总额：{totalOwed:N0} g", infoX + 20, loanY + lineH * nextLine, Color.Red);
+            }
+            else
+            {
+                DrawInfoLine(b, "当前无贷款", infoX + 20, loanY, Color.DimGray);
+            }
         }
         else
         {
-            DrawInfoLine(b, "当前无贷款", infoX + 20, loanY, Color.DimGray);
+            // === Detail view: scrollable individual loan list (max 2 visible, scrollbar) ===
+            string detailTitle = companyLoans.Count > 0
+                ? $"── 贷款明细（共 {companyLoans.Count} 笔）──"
+                : "── 贷款明细（无贷款）──";
+            DrawInfoLine(b, detailTitle, infoX + 20, loanY, Color.DarkCyan);
+
+            if (companyLoans.Count > 0)
+            {
+                int listY = loanY + lineH + 4;
+                int entryH = 120;
+                int maxVisible = 2;
+                int listW = width - 80;
+                int scrollBarX = infoX + listW - 14;
+                int trackH = entryH * maxVisible;
+
+                // Clamp scroll
+                int maxOffset = Math.Max(0, companyLoans.Count - maxVisible);
+                _loanScrollOffset = Math.Clamp(_loanScrollOffset, 0, maxOffset);
+
+                // === Scrollbar track ===
+                b.Draw(Game1.staminaRect, new Rectangle(scrollBarX, listY, 10, trackH), Color.Gray * 0.3f);
+
+                // Scrollbar thumb
+                if (maxOffset > 0)
+                {
+                    float thumbRatio = (float)maxVisible / companyLoans.Count;
+                    int thumbH = Math.Max(24, (int)(trackH * thumbRatio));
+                    int thumbTravel = trackH - thumbH;
+                    float scrollRatio = maxOffset > 0 ? (float)_loanScrollOffset / maxOffset : 0;
+                    int thumbY = listY + (int)(scrollRatio * thumbTravel);
+                    b.Draw(Game1.staminaRect, new Rectangle(scrollBarX, thumbY, 10, thumbH), Color.Gray * 0.6f);
+                }
+                else
+                {
+                    b.Draw(Game1.staminaRect, new Rectangle(scrollBarX, listY, 10, trackH), Color.Gray * 0.6f);
+                }
+
+                _loanRepayBtns.Clear();
+
+                for (int i = 0; i < maxVisible; i++)
+                {
+                    int idx = _loanScrollOffset + i;
+                    if (idx >= companyLoans.Count) break;
+
+                    var l = companyLoans[idx];
+                    int ey = listY + i * entryH;
+                    int today = (int)Game1.stats.DaysPlayed;
+                    int daysLeft = l.DueDay - today;
+                    int entryW = listW - 20;
+
+                    // Entry dark border
+                    Color borderColor = l.IsInDefault ? Color.Red : Color.DarkGoldenrod;
+                    b.Draw(Game1.staminaRect, new Rectangle(infoX, ey, entryW, entryH - 2), Color.Black * 0.4f);
+                    b.Draw(Game1.staminaRect, new Rectangle(infoX, ey, entryW, 2), borderColor);
+                    b.Draw(Game1.staminaRect, new Rectangle(infoX, ey + entryH - 4, entryW, 2), borderColor);
+                    b.Draw(Game1.staminaRect, new Rectangle(infoX, ey, 2, entryH - 2), borderColor);
+                    b.Draw(Game1.staminaRect, new Rectangle(infoX + entryW - 2, ey, 2, entryH - 2), borderColor);
+
+                    // Row 0 (top-right): repay button
+                    int btnX = infoX + entryW - 56;
+                    int btnY = ey + 4;
+                    var repayBtn = new ClickableTextureComponent(
+                        new Rectangle(btnX, btnY, 50, 22),
+                        Game1.mouseCursors, new Rectangle(128, 384, 64, 64), 0.3f
+                    );
+                    _loanRepayBtns.Add(repayBtn);
+                    b.Draw(Game1.staminaRect, repayBtn.bounds, Color.DarkGoldenrod * 0.5f);
+                    b.Draw(Game1.staminaRect, new Rectangle(repayBtn.bounds.X, repayBtn.bounds.Y, repayBtn.bounds.Width, 2), Color.DarkGoldenrod);
+                    b.Draw(Game1.staminaRect, new Rectangle(repayBtn.bounds.X, repayBtn.bounds.Y + repayBtn.bounds.Height - 2, repayBtn.bounds.Width, 2), Color.DarkGoldenrod);
+                    b.Draw(Game1.staminaRect, new Rectangle(repayBtn.bounds.X, repayBtn.bounds.Y, 2, repayBtn.bounds.Height), Color.DarkGoldenrod);
+                    b.Draw(Game1.staminaRect, new Rectangle(repayBtn.bounds.X + repayBtn.bounds.Width - 2, repayBtn.bounds.Y, 2, repayBtn.bounds.Height), Color.DarkGoldenrod);
+                    Vector2 rlSize = Game1.smallFont.MeasureString("还款");
+                    Utility.drawTextWithShadow(b, "还款", Game1.smallFont,
+                        new Vector2(repayBtn.bounds.X + (50 - rlSize.X) / 2, repayBtn.bounds.Y + 3), Color.Gold);
+
+                    // Row 1: loan number + period + due date
+                    Color headerColor;
+                    string header;
+                    if (l.IsFrozen)
+                    {
+                        header = $"#{idx + 1}  借{l.RepaymentPeriodDays}天  |  ⚠ 已冻结（无限期0利息）";
+                        headerColor = Color.Red;
+                    }
+                    else if (l.IsInDefault)
+                    {
+                        header = $"#{idx + 1}  借{l.RepaymentPeriodDays}天  |  到期第{l.DueDay}天（宽限期剩{l.DefaultDaysRemaining}天）";
+                        headerColor = Color.Red;
+                    }
+                    else
+                    {
+                        header = $"#{idx + 1}  借{l.RepaymentPeriodDays}天  |  到期第{l.DueDay}天（剩{daysLeft}天）";
+                        headerColor = daysLeft <= 2 ? Color.Orange : Color.Gold;
+                    }
+                    DrawInfoLine(b, header, infoX + 8, ey + 6, headerColor);
+
+                    // Row 2: principal + rate
+                    DrawInfoLine(b, $"本金 {l.Principal:N0}g  |  日利率 {l.InterestRate * 100:F2}%/天", infoX + 8, ey + 28, Color.White * 0.8f);
+
+                    // Row 3: accumulated interest
+                    DrawInfoLine(b, $"累计利息 {l.AccumulatedInterest:N0}g", infoX + 8, ey + 50, Color.OrangeRed);
+
+                    // Row 4: overdue (if any)
+                    if (l.OverdueInterest > 0)
+                        DrawInfoLine(b, $"逾期欠息 {l.OverdueInterest:N0}g", infoX + 8, ey + 72, Color.Red);
+
+                    // Row 5: total owed
+                    int owed = l.Principal + l.AccumulatedInterest + l.OverdueInterest;
+                    DrawInfoLine(b, $"应还 {owed:N0}g", infoX + 8, ey + 94, Color.Red);
+                }
+            }
         }
 
         // Buttons
@@ -317,6 +510,14 @@ internal class BankMenu : IClickableMenu
         DrawTextButton(b, _borrow7Btn, "借7天", _hoverBorrow7, Color.DarkRed);
         DrawTextButton(b, _borrow14Btn, "借14天", _hoverBorrow14, Color.DarkRed);
         DrawTextButton(b, _repayBtn, "还款", _hoverRepay, Color.OrangeRed);
+        DrawTextButton(b, _loanDetailBtn, _showLoanDetail ? "摘要" : "明细", _hoverLoanDetail, Color.DarkCyan);
+
+        // Stage 9: rescue invest button when company is Dying (restructuring)
+        var dyn2 = _account.DynamicCompanies.FirstOrDefault(c => c.CompanyName == CurrentCompany.Name);
+        if (dyn2 is not null && dyn2.Status == CompanyStatus.Dying && dyn2.TotalRescueSharesPurchased < 7)
+        {
+            DrawTextButton(b, _rescueBtn, "入股救市", _hoverRescue, Color.Purple);
+        }
 
         _closeButton.draw(b);
         drawMouse(b);
@@ -438,7 +639,15 @@ internal class BankMenu : IClickableMenu
                     }
                     acct2.DepositBalance -= amount;
                     acct2.BaseAmount = Math.Max(0, acct2.BaseAmount - amount);
+                    // Track asset pool consumption
+                    if (company.IsDynamic)
+                    {
+                        var dyn2 = _account.DynamicCompanies.FirstOrDefault(c => c.CompanyName == company.Name);
+                        if (dyn2 is not null)
+                            dyn2.AssetPoolConsumed += amount;
+                    }
                     player.Money += amount;
+                    _services.ExemptNextMoneyIncrease = true;
                     SaveAccount();
                     Game1.chatBox?.addInfoMessage($"成功取出 {amount:N0} g！");
                     Game1.activeClickableMenu = new BankMenu(_account, _config, _helper, _services, _selectedCompanyIndex);
@@ -457,12 +666,30 @@ internal class BankMenu : IClickableMenu
                 Game1.chatBox?.addErrorMessage("多人模式功能开发中，请由主机操作。");
                 return;
             }
+            if (_account.IsInBankruptcy)
+            {
+                Game1.chatBox?.addErrorMessage("破产保护期间禁止借款！请先偿还债务。");
+                return;
+            }
+            if (CurrentCompany.IsDynamic)
+            {
+                var dyn = _account.DynamicCompanies.FirstOrDefault(c => c.CompanyName == CurrentCompany.Name);
+                if (dyn is not null && (dyn.Status == CompanyStatus.Hungry || dyn.Status == CompanyStatus.Dying))
+                {
+                    string stateName = dyn.Status == CompanyStatus.Hungry ? "饥饿" : "濒死";
+                    Game1.chatBox?.addErrorMessage($"{CurrentCompany.Name} 处于{stateName}期，禁止借贷！");
+                    return;
+                }
+            }
             Game1.playSound("bigSelect");
             exitThisMenu();
+            int maxBorrow7 = CalcMaxBorrow();
             Game1.activeClickableMenu = new NumberInputMenu(
                 $"请输入从 {CurrentCompany.Name} 借款金额（7天周期）：",
                 amount => ProcessBorrow(amount, 7),
-                () => Game1.activeClickableMenu = new BankMenu(_account, _config, _helper, _services, _selectedCompanyIndex)
+                () => Game1.activeClickableMenu = new BankMenu(_account, _config, _helper, _services, _selectedCompanyIndex),
+                maxAmount: maxBorrow7,
+                allButtonLabel: "最大借款"
             );
             return;
         }
@@ -474,12 +701,30 @@ internal class BankMenu : IClickableMenu
                 Game1.chatBox?.addErrorMessage("多人模式功能开发中，请由主机操作。");
                 return;
             }
+            if (_account.IsInBankruptcy)
+            {
+                Game1.chatBox?.addErrorMessage("破产保护期间禁止借款！请先偿还债务。");
+                return;
+            }
+            if (CurrentCompany.IsDynamic)
+            {
+                var dyn14 = _account.DynamicCompanies.FirstOrDefault(c => c.CompanyName == CurrentCompany.Name);
+                if (dyn14 is not null && (dyn14.Status == CompanyStatus.Hungry || dyn14.Status == CompanyStatus.Dying))
+                {
+                    string stateName14 = dyn14.Status == CompanyStatus.Hungry ? "饥饿" : "濒死";
+                    Game1.chatBox?.addErrorMessage($"{CurrentCompany.Name} 处于{stateName14}期，禁止借贷！");
+                    return;
+                }
+            }
             Game1.playSound("bigSelect");
             exitThisMenu();
+            int maxBorrow14 = CalcMaxBorrow();
             Game1.activeClickableMenu = new NumberInputMenu(
                 $"请输入从 {CurrentCompany.Name} 借款金额（14天周期）：",
                 amount => ProcessBorrow(amount, 14),
-                () => Game1.activeClickableMenu = new BankMenu(_account, _config, _helper, _services, _selectedCompanyIndex)
+                () => Game1.activeClickableMenu = new BankMenu(_account, _config, _helper, _services, _selectedCompanyIndex),
+                maxAmount: maxBorrow14,
+                allButtonLabel: "最大借款"
             );
             return;
         }
@@ -500,13 +745,103 @@ internal class BankMenu : IClickableMenu
 
             Game1.playSound("bigSelect");
             exitThisMenu();
-            int totalOwed = loan.Principal + loan.AccumulatedInterest;
+            int totalOwed = loan.Principal + loan.AccumulatedInterest + loan.OverdueInterest;
             Game1.activeClickableMenu = new NumberInputMenu(
                 $"请输入还款金额（应还 {totalOwed:N0} g）：",
-                amount => ProcessRepay(amount),
+                amount => ProcessRepay(amount, loan),
+                () => Game1.activeClickableMenu = new BankMenu(_account, _config, _helper, _services, _selectedCompanyIndex),
+                maxAmount: totalOwed,
+                allButtonLabel: "全部还款"
+            );
+            return;
+        }
+
+        if (_loanDetailBtn.containsPoint(x, y))
+        {
+            Game1.playSound("smallSelect");
+            _showLoanDetail = !_showLoanDetail;
+            _loanScrollOffset = 0;
+            return;
+        }
+
+        // Stage 9: rescue invest button
+        var dynForRescue = _account.DynamicCompanies.FirstOrDefault(c => c.CompanyName == CurrentCompany.Name);
+        if (dynForRescue is not null && dynForRescue.Status == CompanyStatus.Dying
+            && dynForRescue.TotalRescueSharesPurchased < 7 && _rescueBtn.containsPoint(x, y))
+        {
+            int sharePrice = CurrentCompany.LoanLimit / 7;
+            if (sharePrice <= 0)
+            {
+                Game1.chatBox?.addErrorMessage("救市基金计算异常。");
+                return;
+            }
+            int remainingDays = 7 - dynForRescue.TotalRescueSharesPurchased;
+            int maxAfford = Game1.player.Money / sharePrice;
+            int maxShares = Math.Max(1, Math.Min(remainingDays, Math.Max(1, maxAfford)));
+            if (maxShares < 1)
+            {
+                Game1.chatBox?.addErrorMessage($"金币不足！每百股需 {sharePrice:N0} g。");
+                return;
+            }
+            Game1.playSound("bigSelect");
+            exitThisMenu();
+            Game1.activeClickableMenu = new RescueInvestMenu(
+                _account, _config, _services,
+                CurrentCompany.Name, sharePrice, maxShares,
+                dynForRescue.TotalRescueSharesPurchased,
                 () => Game1.activeClickableMenu = new BankMenu(_account, _config, _helper, _services, _selectedCompanyIndex)
             );
             return;
+        }
+
+        // Per-loan repay buttons in detail view
+        if (_showLoanDetail)
+        {
+            var companyLoans = _loanService.GetCompanyLoans(_account, CurrentCompany.Name);
+            for (int i = 0; i < _loanRepayBtns.Count; i++)
+            {
+                int loanIdx = _loanScrollOffset + i;
+                if (loanIdx >= companyLoans.Count) break;
+                if (_loanRepayBtns[i].containsPoint(x, y))
+                {
+                    var targetLoan = companyLoans[loanIdx];
+                    Game1.playSound("bigSelect");
+                    exitThisMenu();
+                    int owed = targetLoan.Principal + targetLoan.AccumulatedInterest + targetLoan.OverdueInterest;
+                    Game1.activeClickableMenu = new NumberInputMenu(
+                        $"请输入还款金额（应还 {owed:N0} g）：",
+                        amount => ProcessRepay(amount, targetLoan),
+                        () => Game1.activeClickableMenu = new BankMenu(_account, _config, _helper, _services, _selectedCompanyIndex),
+                        maxAmount: owed,
+                        allButtonLabel: "全部还款"
+                    );
+                    return;
+                }
+            }
+
+            // Scrollbar click in detail view
+            int infoX = xPositionOnScreen + 40;
+            int infoY = yPositionOnScreen + 105;
+            int lineH = 26;
+            int lineOffset = GetDepositLineOffset();
+            int loanY = infoY + lineH * (lineOffset + 9);
+            int listY = loanY + lineH + 4;
+            int entryH = 120;
+            int maxVisible = 2;
+            int listW = width - 80;
+            int scrollBarX = infoX + listW - 14;
+            int trackH = entryH * maxVisible;
+            int maxOffset = Math.Max(0, companyLoans.Count - maxVisible);
+
+            if (maxOffset > 0 && x >= scrollBarX && x <= scrollBarX + 10 && y >= listY && y <= listY + trackH)
+            {
+                // Clicked on scrollbar track — jump toward that position
+                float ratio = (float)(y - listY) / trackH;
+                int targetOffset = (int)Math.Round(ratio * maxOffset);
+                _loanScrollOffset = Math.Clamp(targetOffset, 0, maxOffset);
+                Game1.playSound("smallSelect");
+                return;
+            }
         }
     }
 
@@ -517,30 +852,30 @@ internal class BankMenu : IClickableMenu
 
         if (success)
         {
+            _services.ExemptNextMoneyIncrease = true;
             SaveAccount();
             Game1.chatBox?.addInfoMessage($"成功借款 {amount:N0} g（{repaymentDays}天周期）！");
         }
         else
         {
-            var existing = GetCurrentLoan();
-            int currentPrincipal = existing?.Principal ?? 0;
+            int companyPrincipal = _account.Loans.Where(l => l.CompanyName == company.Name && !l.IsTransferred).Sum(l => l.Principal);
 
             // Calculate remaining borrowing capacity
-            int companyRemaining = company.LoanLimit - currentPrincipal;
+            int companyRemaining = company.LoanLimit - companyPrincipal;
 
             int totalDeposits = _account.CompanyAccounts.Sum(a => a.DepositBalance);
-            int totalLoans = _account.Loans.Sum(l => l.Principal);
-            int netWorth = totalDeposits + Game1.player.Money - totalLoans;
+            int totalPrincipal = _account.Loans.Sum(l => l.Principal);
+            int netWorth = totalDeposits + Game1.player.Money - totalPrincipal;
             int leverageLimit = (int)(netWorth * _config.BorrowingLeverageCoefficient);
-            int globalLimit = Math.Min(leverageLimit, _config.BorrowingHardCap);
-            int globalRemaining = globalLimit - totalLoans;
+            int globalLimit = leverageLimit;
+            int globalRemaining = globalLimit - totalPrincipal;
 
             int canBorrow = Math.Min(companyRemaining, globalRemaining);
 
             string reason;
-            if (currentPrincipal + amount > company.LoanLimit)
-                reason = $"超出 {company.Name} 贷款上限（{company.LoanLimit:N0} g，已借 {currentPrincipal:N0} g，公司额度剩余 {companyRemaining:N0} g）";
-            else if (totalLoans + amount > globalLimit)
+            if (companyPrincipal + amount > company.LoanLimit)
+                reason = $"超出 {company.Name} 贷款上限（{company.LoanLimit:N0} g，已借 {companyPrincipal:N0} g，公司额度剩余 {companyRemaining:N0} g）";
+            else if (totalPrincipal + amount > globalLimit)
                 reason = $"超出全局借款上限（{globalLimit:N0} g，净资产 {netWorth:N0} g × {_config.BorrowingLeverageCoefficient:F1}，全局额度剩余 {globalRemaining:N0} g）";
             else
                 reason = "借款条件不满足";
@@ -551,21 +886,42 @@ internal class BankMenu : IClickableMenu
         Game1.activeClickableMenu = new BankMenu(_account, _config, _helper, _services, _selectedCompanyIndex);
     }
 
-    private void ProcessRepay(int amount)
+    private void ProcessRepay(int amount, LoanRecord loan)
     {
-        var loan = GetCurrentLoan();
-        if (loan is null)
-        {
-            Game1.chatBox?.addErrorMessage("没有贷款需要还款！");
-            Game1.activeClickableMenu = new BankMenu(_account, _config, _helper, _services, _selectedCompanyIndex);
-            return;
-        }
-
         int repaid = _loanService.RepayLoan(loan, amount, _account);
         if (repaid > 0)
         {
+            // Refresh global debt flags immediately
+            _account.IsInInterestDebt = _account.Loans.Any(l => l.IsInInterestDebt);
+            _account.IsInPrincipalDebt = _account.Loans.Any(l => l.IsInDefault);
+
+            // Re-check bankruptcy immediately — exit if all overdue debt cleared
+            _services.BankruptcyHandler.CheckBankruptcy(_account, _config);
+
+            if (!_account.IsInBankruptcy && _account.BankruptcyWarningShown)
+            {
+                Game1.chatBox?.addInfoMessage("所有逾期债务已清偿，破产保护已解除。");
+            }
+
             SaveAccount();
-            Game1.chatBox?.addInfoMessage($"成功还款 {repaid:N0} g！{(loan.Principal <= 0 && loan.AccumulatedInterest <= 0 ? " 贷款已结清。" : "")}");
+
+            // Reload to ensure saved state is consistent
+            var freshAccount = _accountService.Load();
+            bool cleared = loan.Principal <= 0 && loan.AccumulatedInterest <= 0 && loan.OverdueInterest <= 0;
+            Game1.chatBox?.addInfoMessage($"成功还款 {repaid:N0} g！{(cleared ? " 该笔贷款已结清。" : "")}");
+
+            // If no problem loans remain, force-clear all warning flags unconditionally
+            bool hasProblems = freshAccount.Loans.Any(l => l.IsFrozen || l.IsInDefault || l.IsInInterestDebt);
+            if (!hasProblems)
+            {
+                freshAccount.IsInBankruptcy = false;
+                freshAccount.IsInInterestDebt = false;
+                freshAccount.IsInPrincipalDebt = false;
+                freshAccount.BankruptcyWarningShown = false;
+                _accountService.Save(freshAccount);
+            }
+            Game1.activeClickableMenu = new BankMenu(freshAccount, _config, _helper, _services, _selectedCompanyIndex);
+            return;
         }
         else
         {
@@ -573,6 +929,55 @@ internal class BankMenu : IClickableMenu
         }
 
         Game1.activeClickableMenu = new BankMenu(_account, _config, _helper, _services, _selectedCompanyIndex);
+    }
+
+    private int CalcMaxBorrow()
+    {
+        var company = CurrentCompany;
+        int companyPrincipal = _account.Loans.Where(l => l.CompanyName == company.Name && !l.IsTransferred).Sum(l => l.Principal);
+        int companyRemaining = company.LoanLimit - companyPrincipal;
+        int totalDeposits = _account.CompanyAccounts.Sum(a => a.DepositBalance);
+        int totalPrincipal = _account.Loans.Sum(l => l.Principal);
+        int netWorth = totalDeposits + Game1.player.Money - totalPrincipal;
+        int globalLimit = (int)(netWorth * _config.BorrowingLeverageCoefficient);
+        int globalRemaining = globalLimit - totalPrincipal;
+        return Math.Max(0, Math.Min(companyRemaining, globalRemaining));
+    }
+
+    private int GetDepositLineOffset()
+    {
+        int offset = 0;
+        var company = CurrentCompany;
+        if (company.IsDynamic)
+        {
+            var dyn = _account.DynamicCompanies.FirstOrDefault(c => c.CompanyName == company.Name);
+            if (dyn is not null)
+            {
+                var statusText = dyn.Status switch
+                {
+                    CompanyStatus.New => "",
+                    _ => ""
+                };
+                if (dyn.Status != CompanyStatus.Bankrupt) offset++; // status line
+                var cropData = CropDataProvider.GetByCode(company.CropCode ?? company.Name);
+                if (cropData is not null) offset += 2; // fuel + consumption
+            }
+        }
+        return offset;
+    }
+
+    public override void receiveScrollWheelAction(int direction)
+    {
+        if (_showLoanDetail)
+        {
+            var companyLoans = _loanService.GetCompanyLoans(_account, CurrentCompany.Name);
+            int maxVisible = 2;
+            int maxOffset = Math.Max(0, companyLoans.Count - maxVisible);
+            if (direction > 0)
+                _loanScrollOffset = Math.Max(0, _loanScrollOffset - 1);
+            else if (direction < 0)
+                _loanScrollOffset = Math.Min(maxOffset, _loanScrollOffset + 1);
+        }
     }
 
     public override void receiveRightClick(int x, int y, bool playSound = true)
@@ -588,5 +993,7 @@ internal class BankMenu : IClickableMenu
         _hoverBorrow7 = _borrow7Btn.containsPoint(x, y);
         _hoverBorrow14 = _borrow14Btn.containsPoint(x, y);
         _hoverRepay = _repayBtn.containsPoint(x, y);
+        _hoverRescue = _rescueBtn.containsPoint(x, y);
+        _hoverLoanDetail = _loanDetailBtn.containsPoint(x, y);
     }
 }

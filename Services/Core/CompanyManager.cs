@@ -14,6 +14,7 @@ public class CompanyManager : ICompanyManager
     private readonly IInterestCalculator _dynamicInterestCalculator;
     private readonly IBankAccountService _accountService;
     private readonly ILoanService _loanService;
+    private readonly IBankruptcyHandler _bankruptcyHandler;
     private readonly ShipmentTrackingService _shipmentTracking;
     private readonly IFuelService _fuelService;
     private readonly ModConfig _config;
@@ -27,6 +28,7 @@ public class CompanyManager : ICompanyManager
         IInterestCalculator dynamicInterestCalculator,
         IBankAccountService accountService,
         ILoanService loanService,
+        IBankruptcyHandler bankruptcyHandler,
         ShipmentTrackingService shipmentTracking,
         IFuelService fuelService,
         ModConfig config,
@@ -36,6 +38,7 @@ public class CompanyManager : ICompanyManager
         _dynamicInterestCalculator = dynamicInterestCalculator;
         _accountService = accountService;
         _loanService = loanService;
+        _bankruptcyHandler = bankruptcyHandler;
         _shipmentTracking = shipmentTracking;
         _fuelService = fuelService;
         _config = config;
@@ -63,8 +66,23 @@ public class CompanyManager : ICompanyManager
         TickSuppression(account);
 
         // Step 4: Update fuel inventory on the shared account → derive company statuses
+        // Stage 9: restore fuel for restructuring companies (fuel doesn't drain during restructuring)
+        var restructuringCompanies = account.DynamicCompanies
+            .Where(c => c.RestructuringDaysRemaining > 0).ToList();
+        var fuelSnapshots = restructuringCompanies
+            .ToDictionary(c => c.CompanyName, c => c.FuelStock);
+
         _fuelService.UpdateDailyInventory(account);
+
+        // Restore fuel for restructuring companies
+        foreach (var kvp in fuelSnapshots)
+        {
+            var rc = account.DynamicCompanies.FirstOrDefault(c => c.CompanyName == kvp.Key);
+            if (rc is not null) rc.FuelStock = kvp.Value;
+        }
+
         UpdateCompanyStatuses(account);
+        ProgressRestructuring(account);
 
         // Daily status summary
         if (account.DynamicCompanies.Count > 0)
@@ -83,8 +101,24 @@ public class CompanyManager : ICompanyManager
         // Step 5.5: V3.7 manual compound interest detection
         DetectManualCompoundInterest(account);
 
-        // Step 6: Settle daily loans
+        // Step 6: Settle daily loans (Stage 8: interest deduction, debt tracking, bankruptcy on forced-collection failure)
         _loanService.DailyTick(account, _config, _fixedInterestCalculator);
+
+        // Step 7: Show first-time bankruptcy warning
+        if (account.IsInBankruptcy && !account.BankruptcyWarningShown)
+        {
+            account.BankruptcyWarningShown = true;
+            Game1.chatBox?.addInfoMessage("⚠ 你已进入破产保护状态！逾期贷款已被冻结（0利息），借款暂停，每日出货收入50%强制偿债。");
+            _monitor.Log("[Bankruptcy] Player entered bankruptcy protection", LogLevel.Warn);
+        }
+        else if (account.IsInPrincipalDebt && !account.IsInBankruptcy)
+        {
+            Game1.chatBox?.addInfoMessage("⚠ 你有贷款已逾期！宽限期结束后将从存款强制划扣，请尽快还款。");
+        }
+        else if (account.IsInInterestDebt && !account.IsInBankruptcy && !account.IsInPrincipalDebt)
+        {
+            Game1.chatBox?.addInfoMessage("⚠ 现金不足以支付贷款日息，已进入利息欠债状态。");
+        }
 
         _accountService.Save(account);
     }
@@ -117,19 +151,36 @@ public class CompanyManager : ICompanyManager
 
             var cropData = CropDataProvider.GetByCode(dc.CropCode);
             double r = cropData?.R ?? 0;
-            // V3.5 patch5 3-tier discount rules applied to base rates
             double depRate = r > 0.20 ? r * 0.5 : r > 0 ? r : 0;
             double loanRate = r > 0.20 ? r * 0.75 : r > 0 ? r * 1.5 : 0;
+
+            // Stage 9: Apply status multipliers (value2.txt §3.1)
+            double rateMultiplier = dc.Status switch
+            {
+                CompanyStatus.Prosperous => 1.2,
+                CompanyStatus.Stable => 0.9,
+                CompanyStatus.Hungry => 0.7,
+                CompanyStatus.Dying => 0.4,
+                _ => 1.0
+            };
+            double loanLimitMultiplier = dc.Status switch
+            {
+                CompanyStatus.Prosperous => _config.ProsperousLoanLimitMult / 10.0,
+                CompanyStatus.Stable => _config.StableLoanLimitMult / 10.0,
+                CompanyStatus.Hungry => _config.HungryLoanLimitMult / 10.0,
+                CompanyStatus.Dying => _config.DyingLoanLimitMult / 10.0,
+                _ => 1.0
+            };
 
             result.Add(new CompanyDefinition
             {
                 Name = dc.CompanyName,
                 CropCode = dc.CropCode,
                 IsDynamic = true,
-                DepositInterestRate = depRate,
-                LoanInterestRate = loanRate,
+                DepositInterestRate = depRate * rateMultiplier,
+                LoanInterestRate = loanRate * rateMultiplier,
                 DepositLimit = dc.DepositLimit,
-                LoanLimit = dc.LoanLimit,
+                LoanLimit = (int)(dc.DepositLimit * loanLimitMultiplier),
                 RainBonus = 0,
                 SunBonus = 0,
                 SnowBonus = 0,
@@ -145,30 +196,22 @@ public class CompanyManager : ICompanyManager
         var ca = account.CompanyAccounts.FirstOrDefault(a => a.CompanyName == company.Name);
         if (ca is null) return 0;
 
-        // Fixed companies: no asset pool restriction
         if (!company.IsDynamic)
             return ca.DepositBalance;
 
-        // Dynamic companies: asset pool only during Hungry/Dying
         var dyn = account.DynamicCompanies.FirstOrDefault(c => c.CompanyName == company.Name);
         if (dyn is null) return ca.DepositBalance;
 
-        double statusMultiplier = dyn.Status switch
-        {
-            CompanyStatus.Hungry => 0.6,
-            CompanyStatus.Dying => 0.3,
-            _ => 1.0
-        };
-
-        // Statuses other than Hungry/Dying: no asset pool restriction
-        if (statusMultiplier >= 1.0)
+        // Asset pool restriction only during Hungry/Dying (value2.txt §5.1)
+        bool restricted = dyn.Status == CompanyStatus.Hungry || dyn.Status == CompanyStatus.Dying;
+        if (!restricted)
             return ca.DepositBalance;
 
-        int effectiveLoanLimit = (int)(company.LoanLimit * statusMultiplier);
+        // company.LoanLimit already has the status multiplier applied in GetAllCompanyDefinitions
         int outstandingPrincipal = account.Loans.Where(l => l.CompanyName == company.Name).Sum(l => l.Principal);
-        int assetPool = Math.Max(0, effectiveLoanLimit - outstandingPrincipal);
-
-        return Math.Min(ca.DepositBalance, Math.Max(0, assetPool));
+        int assetPool = Math.Max(0, company.LoanLimit - outstandingPrincipal);
+        int remainingPool = Math.Max(0, assetPool - dyn.AssetPoolConsumed);
+        return Math.Min(ca.DepositBalance, remainingPool);
     }
 
     // ============================================================================
@@ -209,7 +252,7 @@ public class CompanyManager : ICompanyManager
             var cropData = CropDataProvider.GetByCode(shipment.CropCode);
             if (cropData is null) continue;
 
-            GenerateDynamicCompany(account, shipment.CropCode, cropData);
+            GenerateDynamicCompany(account, shipment.CropCode, cropData, shipment.CumulativeSellCount);
 
             activeCount++;
             account.DynamicCompaniesSpawnedThisSeason++;
@@ -218,9 +261,15 @@ public class CompanyManager : ICompanyManager
         }
     }
 
-    private void GenerateDynamicCompany(BankAccountData account, string cropCode, CropDataRecord cropData)
+    private void GenerateDynamicCompany(BankAccountData account, string cropCode, CropDataRecord cropData, int cumulativeSells)
     {
         int today = (int)Game1.stats.DaysPlayed;
+
+        // Initial fuel: 30% of Smax + all accumulated crop sells converted to FP
+        int baseFP = (int)(cropData.Smax * 0.3 * 10);
+        int sellBonusFP = cumulativeSells * 10;
+        int maxFP = (int)(cropData.Smax * 2 * 10); // cap at 200% of Smax
+        int initialFuel = Math.Min(baseFP + sellBonusFP, maxFP);
 
         var company = new DynamicCompanyData
         {
@@ -231,7 +280,7 @@ public class CompanyManager : ICompanyManager
             Status = CompanyStatus.New,
             DepositLimit = (int)(cropData.EquivalentCost * _config.DepositLoanCoefficient),
             LoanLimit = (int)(cropData.EquivalentCost * _config.DepositLoanCoefficient),
-            FuelStock = (int)(cropData.Smax * 0.3 * 10) // Smax × 0.3 in FP
+            FuelStock = initialFuel
         };
 
         account.DynamicCompanies.Add(company);
@@ -261,9 +310,41 @@ public class CompanyManager : ICompanyManager
         {
             if (company.Status == CompanyStatus.Bankrupt) continue;
 
+            // Stage 9: restructuring companies — skip fuel drain, check revival
+            if (company.RestructuringDaysRemaining > 0)
+            {
+                var rcData = CropDataProvider.GetByCode(company.CropCode);
+                double rSatisfaction = rcData is not null && rcData.Smax > 0
+                    ? company.FuelStock / (rcData.Smax * 10.0)
+                    : 1.0;
+
+                // Revival: fuel ≥ 80% (exit Hungry → Stable)
+                if (rSatisfaction >= 0.80)
+                {
+                    if (company.PendingRescueDeposit > 0)
+                    {
+                        var rca = account.CompanyAccounts.FirstOrDefault(a => a.CompanyName == company.CompanyName);
+                        if (rca is not null)
+                        {
+                            rca.BaseAmount += company.PendingRescueDeposit * 2;
+                            rca.DepositBalance += company.PendingRescueDeposit * 2;
+                            Game1.chatBox?.addInfoMessage(
+                                $"{company.CompanyName} 复活！入股注资翻倍：{company.PendingRescueDeposit * 2:N0} g 已计入存款本金。");
+                        }
+                        company.PendingRescueDeposit = 0;
+                    }
+                    company.RestructuringDaysRemaining = 0;
+                    company.TotalRescueSharesPurchased = 0;
+                    company.Status = CompanyStatus.Stable;
+                    company.AssetPoolConsumed = 0;
+                    _monitor.Log($"[Stage9] {company.CompanyName} revived (fuel satisfaction {rSatisfaction*100:F0}%)", LogLevel.Info);
+                }
+                continue;
+            }
+
             var cropData = CropDataProvider.GetByCode(company.CropCode);
-            double satisfaction = cropData is not null && cropData.DBase > 0
-                ? company.FuelStock / (cropData.DBase * 10.0)
+            double satisfaction = cropData is not null && cropData.Smax > 0
+                ? company.FuelStock / (cropData.Smax * 10.0)
                 : 1.0;
 
             if (company.Status == CompanyStatus.New)
@@ -274,26 +355,32 @@ public class CompanyManager : ICompanyManager
             }
 
             var newStatus = DeriveStatusFromSatisfaction(satisfaction);
+
+            // Reset asset pool consumption when leaving Hungry/Dying
+            bool wasRestricted = company.Status == CompanyStatus.Hungry || company.Status == CompanyStatus.Dying;
+            bool stillRestricted = newStatus == CompanyStatus.Hungry || newStatus == CompanyStatus.Dying;
+            if (wasRestricted && !stillRestricted)
+                company.AssetPoolConsumed = 0;
+
+            // Enter restructuring when first hitting Dying
+            if (newStatus == CompanyStatus.Dying && company.Status != CompanyStatus.Dying)
+            {
+                company.Status = CompanyStatus.Dying;
+                company.RestructuringDaysRemaining = 0;
+                TransferLoansFromDyingCompany(account, company);
+                Game1.chatBox?.addInfoMessage(
+                    $"⚠ {company.CompanyName} 进入濒死重组期！请入股救市购买重组天数（每百股 {company.LoanLimit/7:N0} g），上限7天。");
+                _monitor.Log($"[Stage9] {company.CompanyName} entered Dying restructuring", LogLevel.Warn);
+                continue;
+            }
+
             company.Status = newStatus;
 
-            // Fuel-starved company dies immediately
-            if (company.FuelStock <= 0 && newStatus == CompanyStatus.Dying)
+            // Fuel-starved but NOT in restructuring → immediate death
+            if (company.FuelStock <= 0 && newStatus == CompanyStatus.Dying && company.RestructuringDaysRemaining <= 0)
             {
-                company.Status = CompanyStatus.Bankrupt;
-                company.BankruptcySeason = Game1.currentSeason;
-                company.BankruptcyYear = Game1.year;
-
-                var ca = account.CompanyAccounts.FirstOrDefault(a => a.CompanyName == company.CompanyName);
-                if (ca is not null)
-                {
-                    ca.DepositBalance = 0;
-                    ca.BaseAmount = 0;
-                    ca.AccumulatedInterest = 0;
-                }
-
-                _monitor.Log($"公司倒闭：{company.CompanyName} 燃料耗尽，已关闭。存款清零。", LogLevel.Warn);
-                if (_config.ShowCompanyDangerWarning)
-                    Game1.chatBox?.addInfoMessage($"公司倒闭：{company.CompanyName} 燃料耗尽，已关闭。存款清零。");
+                TransferLoansFromDyingCompany(account, company);
+                LiquidateCompany(account, company);
             }
         }
     }
@@ -322,10 +409,12 @@ public class CompanyManager : ICompanyManager
             var company = allCompanyDefs.FirstOrDefault(c => c.Name == ca.CompanyName);
             if (company is null) continue;
 
-            // When principal has been fully withdrawn (or over-withdrawn), the remaining
-            // balance becomes new principal — but capped at DepositLimit so interest
-            // money can't be "laundered" into excess principal.
-            if (ca.BaseAmount <= 0 && ca.DepositBalance > 0)
+            // Rebalance principal/interest when:
+            // 1. Principal withdrawn past zero (BaseAmount ≤ 0), or
+            // 2. Total deposit ≤ accumulated interest (AccInt has consumed the balance)
+            // AccInt = max(0, DepositBalance - DepositLimit); excess→interest, rest→principal
+            if (ca.DepositBalance > 0 &&
+                (ca.BaseAmount <= 0 || ca.DepositBalance <= ca.AccumulatedInterest))
             {
                 ca.AccumulatedInterest = Math.Max(0, ca.DepositBalance - company.DepositLimit);
                 ca.BaseAmount = ca.DepositBalance - ca.AccumulatedInterest;
@@ -550,5 +639,159 @@ public class CompanyManager : ICompanyManager
         var suppression = account.CropSuppressions.FirstOrDefault(
             s => s.CropCode == (company.CropCode ?? company.Name));
         return suppression?.Stacks ?? 0;
+    }
+
+    /// <summary>Decrement restructuring days; liquidate if expired without revival.</summary>
+    private void ProgressRestructuring(BankAccountData account)
+    {
+        foreach (var company in account.DynamicCompanies)
+        {
+            if (company.RestructuringDaysRemaining <= 0) continue;
+            if (company.Status == CompanyStatus.Bankrupt) continue;
+
+            company.RestructuringDaysRemaining--;
+
+            if (company.RestructuringDaysRemaining <= 0)
+            {
+                // Restructuring expired → liquidate
+                TransferLoansFromDyingCompany(account, company);
+                LiquidateCompany(account, company);
+            }
+        }
+    }
+
+    // ============================================================================
+    // Stage 9: Debt Transfer, Tiered Liquidation, Rescue Investment
+    // ============================================================================
+
+    /// <summary>Transfer all loans from the dying company to the fixed company with the highest current loan rate.</summary>
+    private void TransferLoansFromDyingCompany(BankAccountData account, DynamicCompanyData company)
+    {
+        var companyLoans = account.Loans.Where(l => l.CompanyName == company.CompanyName && !l.IsFrozen).ToList();
+        if (companyLoans.Count == 0) return;
+
+        var bestFixed = _config.Companies
+            .OrderByDescending(c => c.LoanInterestRate)
+            .First();
+
+        int today = (int)Game1.stats.DaysPlayed;
+        double transferRate = bestFixed.LoanInterestRate * _config.DebtTransferRateDiscount;
+
+        foreach (var loan in companyLoans)
+        {
+            loan.CompanyName = bestFixed.Name;
+            loan.InterestRate = transferRate;
+            loan.RepaymentPeriodDays = _config.DebtTransferNewRepaymentDays;
+            loan.DueDay = today + _config.DebtTransferNewRepaymentDays;
+            loan.IsInDefault = false;
+            loan.DefaultDaysRemaining = 0;
+            loan.IsTransferred = true;
+        }
+
+        Game1.chatBox?.addInfoMessage($"债券转移：{company.CompanyName} 的 {companyLoans.Count} 笔贷款已转移至 {bestFixed.Name}（利率 {transferRate*100:F2}%/天）。");
+        _monitor.Log($"[Stage9] {companyLoans.Count} loans transferred from {company.CompanyName} to {bestFixed.Name}", LogLevel.Info);
+    }
+
+    /// <summary>Formal liquidation: return deposit by status tier, clear company, reset shipment counter.</summary>
+    private void LiquidateCompany(BankAccountData account, DynamicCompanyData company)
+    {
+        double returnRate = company.Status switch
+        {
+            CompanyStatus.Prosperous => _config.ProsperousReturnRate,
+            CompanyStatus.Stable => _config.StableReturnRate,
+            CompanyStatus.Hungry => _config.HungryReturnRate,
+            CompanyStatus.Dying => _config.DyingReturnRate,
+            _ => 0
+        };
+
+        if (company.Status == CompanyStatus.Stable)
+            returnRate = Math.Min(returnRate, _config.ProsperousReturnRate);
+
+        var ca = account.CompanyAccounts.FirstOrDefault(a => a.CompanyName == company.CompanyName);
+        int returnAmount = ca is not null ? (int)(ca.BaseAmount * returnRate) : 0;
+
+        int rescueLost = company.PendingRescueDeposit;
+        company.PendingRescueDeposit = 0;
+        company.RestructuringDaysRemaining = 0;
+        company.TotalRescueSharesPurchased = 0;
+
+        if (returnAmount > 0)
+            Game1.player.Money += returnAmount;
+
+        string msg = $"公司倒闭：{company.CompanyName} 燃料耗尽";
+        if (returnAmount > 0)
+            msg += $"，返还存款 {returnAmount:N0} g（{returnRate*100:F0}%）";
+        else
+            msg += "，存款归零";
+        if (rescueLost > 0)
+            msg += $"，入股注资 {rescueLost:N0} g 已清零";
+        Game1.chatBox?.addInfoMessage(msg);
+
+        if (ca is not null)
+        {
+            ca.DepositBalance = 0;
+            ca.BaseAmount = 0;
+            ca.AccumulatedInterest = 0;
+        }
+
+        company.Status = CompanyStatus.Bankrupt;
+        company.BankruptcySeason = Game1.currentSeason;
+        company.BankruptcyYear = Game1.year;
+
+        var shipment = account.CropShipments.FirstOrDefault(s => s.CropCode == company.CropCode);
+        if (shipment is not null)
+        {
+            shipment.CumulativeSellCount = 0;
+            shipment.ConsecutiveSellDays = 0;
+            shipment.LastSellDay = 0;
+        }
+
+        _monitor.Log($"[Stage9] {company.CompanyName} liquidated, returned {returnAmount}g ({returnRate*100:F0}%)", LogLevel.Warn);
+    }
+
+    public bool RescueInvest(BankAccountData account, string companyName, int amount)
+    {
+        if (amount <= 0) return false;
+
+        var company = account.DynamicCompanies.FirstOrDefault(c => c.CompanyName == companyName);
+        if (company is null) return false;
+        if (company.Status != CompanyStatus.Dying && company.RestructuringDaysRemaining <= 0) return false;
+
+        // 每百股价格 = 有效贷款上限 / 7（应用状态乘数后）
+        double loanLimitMult = company.Status switch
+        {
+            CompanyStatus.Dying => _config.DyingLoanLimitMult / 10.0,
+            _ => 1.0
+        };
+        int effectiveLoanLimit = (int)(company.LoanLimit * loanLimitMult);
+        int sharePrice = effectiveLoanLimit / 7;
+        if (sharePrice <= 0) return false;
+
+        // amount buys N 百股 → N restructuring days, capped at 7 total
+        int newDays = amount / sharePrice;
+        if (newDays <= 0) return false;
+
+        int newTotalDays = Math.Min(7, company.RestructuringDaysRemaining + newDays);
+        int actualDaysAdded = newTotalDays - company.RestructuringDaysRemaining;
+        if (actualDaysAdded <= 0) return false;
+
+        int actualCost = actualDaysAdded * sharePrice;
+        if (Game1.player.Money < actualCost) return false;
+
+        Game1.player.Money -= actualCost;
+        company.RestructuringDaysRemaining = newTotalDays;
+        company.TotalRescueSharesPurchased += actualDaysAdded;
+        company.PendingRescueDeposit += actualCost;
+
+        // Start restructuring if not already
+        if (company.Status != CompanyStatus.Dying && company.RestructuringDaysRemaining > 0)
+        {
+            // Company was about to die but got saved by restructuring
+        }
+
+        Game1.chatBox?.addInfoMessage(
+            $"入股救市：向 {companyName} 购买 {actualDaysAdded} 百股（{actualCost:N0} g），" +
+            $"重组期延长至 {newTotalDays} 天。复活后注资翻倍计入存款。");
+        return true;
     }
 }

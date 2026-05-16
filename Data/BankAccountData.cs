@@ -27,6 +27,19 @@ public class BankAccountData
     public string PierreThanksLetterText { get; set; } = "";
     public string MorrisThanksLetterText { get; set; } = "";
 
+    // === Stage 8: Debt & Bankruptcy tracking ===
+    /// <summary>Whether the player is in the bankruptcy protection state.</summary>
+    public bool IsInBankruptcy { get; set; }
+
+    /// <summary>Whether the first-time bankruptcy warning popup has been shown this cycle.</summary>
+    public bool BankruptcyWarningShown { get; set; }
+
+    /// <summary>Whether the player is in principal-debt state (fixed company loan maturity missed).</summary>
+    public bool IsInPrincipalDebt { get; set; }
+
+    /// <summary>Whether the player is in interest-debt state (dynamic company daily interest unpaid).</summary>
+    public bool IsInInterestDebt { get; set; }
+
     // Legacy fields — migrated to Loans on load by LoanService
     public int LoanPrincipal { get; set; }
     public int AccumulatedInterest { get; set; }
@@ -71,6 +84,12 @@ public class LoanRecord
     /// <summary>Unpaid interest accumulated since last repayment or loan start.</summary>
     public int AccumulatedInterest { get; set; }
 
+    /// <summary>Overdue daily interest that couldn't be deducted from player cash (Stage 8 interest debt).</summary>
+    public int OverdueInterest { get; set; }
+
+    /// <summary>Whether this loan is in interest-debt state (daily interest deduction failed).</summary>
+    public bool IsInInterestDebt { get; set; }
+
     /// <summary>Effective daily loan interest rate stored at time of borrowing (after discount).</summary>
     public double InterestRate { get; set; }
 
@@ -88,4 +107,10 @@ public class LoanRecord
 
     /// <summary>Remaining grace days before forced collection. Reset to config value on default entry.</summary>
     public int DefaultDaysRemaining { get; set; }
+
+    /// <summary>Whether this loan is frozen (bankrupt — no interest, no due date, infinite term).</summary>
+    public bool IsFrozen { get; set; }
+
+    /// <summary>Whether this loan was transferred from another company (doesn't count against the receiving company's loan limit).</summary>
+    public bool IsTransferred { get; set; }
 }

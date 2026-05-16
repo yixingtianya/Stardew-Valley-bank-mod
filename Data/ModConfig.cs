@@ -90,20 +90,28 @@ public class ModConfig
     public double BankruptcyIncomeDeduction { get; set; } = 0.50;
 
     /*********
-    ** 债券交易
+    ** 债券交易（阶段九）
     *********/
-    public int BankruptcyNoTradeDays { get; set; } = 14;
-    public int BankruptcyRateNegativeDays { get; set; } = 5;
-    public int BankruptcyDepositThreshold { get; set; } = 5000;
-    public int PreBankruptcyGraceDays { get; set; } = 3;
     public double DebtTransferRateDiscount { get; set; } = 0.50;
     public int DebtTransferNewRepaymentDays { get; set; } = 28;
+
+    /*********
+    ** 公司倒闭与清算（阶段九）
+    *********/
+    public int ProsperousLoanLimitMult { get; set; } = 10;
+    public int StableLoanLimitMult { get; set; } = 9;
+    public int HungryLoanLimitMult { get; set; } = 6;
+    public int DyingLoanLimitMult { get; set; } = 3;
+    public double ProsperousReturnRate { get; set; } = 0.80;
+    public double StableReturnRate { get; set; } = 0.50;
+    public double HungryReturnRate { get; set; } = 0.0;
+    public double DyingReturnRate { get; set; } = 0.0;
+    public double RescueInvestmentCapRatio { get; set; } = 0.50;
 
     /*********
     ** 借款上限
     *********/
     public double BorrowingLeverageCoefficient { get; set; } = 2.0;
-    public int BorrowingHardCap { get; set; } = 500000;
     public double FixedCompanyQuotaRatio { get; set; } = 0.60;
 
     /*********
@@ -149,14 +157,18 @@ public class ModConfig
             PrincipalDebtGraceDays = PrincipalDebtGraceDays,
             PenaltyInterestRate = PenaltyInterestRate,
             BankruptcyIncomeDeduction = BankruptcyIncomeDeduction,
-            BankruptcyNoTradeDays = BankruptcyNoTradeDays,
-            BankruptcyRateNegativeDays = BankruptcyRateNegativeDays,
-            BankruptcyDepositThreshold = BankruptcyDepositThreshold,
-            PreBankruptcyGraceDays = PreBankruptcyGraceDays,
             DebtTransferRateDiscount = DebtTransferRateDiscount,
             DebtTransferNewRepaymentDays = DebtTransferNewRepaymentDays,
+            ProsperousLoanLimitMult = ProsperousLoanLimitMult,
+            StableLoanLimitMult = StableLoanLimitMult,
+            HungryLoanLimitMult = HungryLoanLimitMult,
+            DyingLoanLimitMult = DyingLoanLimitMult,
+            ProsperousReturnRate = ProsperousReturnRate,
+            StableReturnRate = StableReturnRate,
+            HungryReturnRate = HungryReturnRate,
+            DyingReturnRate = DyingReturnRate,
+            RescueInvestmentCapRatio = RescueInvestmentCapRatio,
             BorrowingLeverageCoefficient = BorrowingLeverageCoefficient,
-            BorrowingHardCap = BorrowingHardCap,
             FixedCompanyQuotaRatio = FixedCompanyQuotaRatio,
             TransferFeeMode = TransferFeeMode,
             TransferFeeValue = TransferFeeValue,
