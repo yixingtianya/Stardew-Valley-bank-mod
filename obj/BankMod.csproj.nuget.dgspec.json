@@ -1,17 +1,17 @@
 {
   "format": 1,
   "restore": {
-    "f:\\agency-agents-main\\Stardew Valley bank mod refactored\\BankMod.csproj": {}
+    "F:\\agency-agents-main\\Stardew Valley bank mod refactored\\BankMod.csproj": {}
   },
   "projects": {
-    "f:\\agency-agents-main\\Stardew Valley bank mod refactored\\BankMod.csproj": {
+    "F:\\agency-agents-main\\Stardew Valley bank mod refactored\\BankMod.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "f:\\agency-agents-main\\Stardew Valley bank mod refactored\\BankMod.csproj",
-        "projectName": "BankModRefactored",
-        "projectPath": "f:\\agency-agents-main\\Stardew Valley bank mod refactored\\BankMod.csproj",
+        "projectUniqueName": "F:\\agency-agents-main\\Stardew Valley bank mod refactored\\BankMod.csproj",
+        "projectName": "DynamicFinancialSystem",
+        "projectPath": "F:\\agency-agents-main\\Stardew Valley bank mod refactored\\BankMod.csproj",
         "packagesPath": "C:\\Users\\you yiyun\\.nuget\\packages\\",
-        "outputPath": "f:\\agency-agents-main\\Stardew Valley bank mod refactored\\obj\\",
+        "outputPath": "F:\\agency-agents-main\\Stardew Valley bank mod refactored\\obj\\",
         "projectStyle": "PackageReference",
         "configFilePaths": [
           "C:\\Users\\you yiyun\\AppData\\Roaming\\NuGet\\NuGet.Config"

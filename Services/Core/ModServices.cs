@@ -34,6 +34,21 @@ public class ModServices
     // Stage 8 bankruptcy: exempt next money increase from garnishment (bank withdrawal)
     public bool ExemptNextMoneyIncrease { get; set; }
 
+    // Stage 13: multiplayer remote operation callback
+    public Action<string, string, int, string?>? SendRemoteOperation { get; set; }
+    public bool StandaloneMode { get; set; }
+
+    // Stage 14: route flags — forwarded to RouteService
+    public string CompletedRoute => RouteService.CompletedRoute;
+    public bool OnlineShoppingUnlocked => RouteService.OnlineShoppingUnlocked;
+    public bool PierreBoosted => RouteService.PierreBoosted;
+    public bool JojaBoosted => RouteService.JojaBoosted;
+
+    // Stage 14: new services
+    public Abstractions.IRouteService RouteService { get; }
+    public Abstractions.IEventScriptService EventScriptService { get; }
+    public Abstractions.IStoreHoursService StoreHoursService { get; }
+
     public ModServices(IModHelper helper, Data.ModConfig config, IMonitor monitor)
     {
         Monitor = monitor;
@@ -60,6 +75,9 @@ public class ModServices
         CreditLimitService = new CreditLimitService();
         MessageScheduler = new MessageScheduler();
         SeasonalFruitMarket = new SeasonalFruitMarket();
+        RouteService = new RouteService(CompanyManager, config, monitor);
+        EventScriptService = new EventScriptService(helper, RouteService, monitor);
+        StoreHoursService = new StoreHoursService(helper, monitor);
     }
 
     /// <summary>

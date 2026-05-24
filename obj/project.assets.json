@@ -43,7 +43,7 @@
     "version": "1.0.0",
     "restore": {
       "projectUniqueName": "f:\\agency-agents-main\\Stardew Valley bank mod refactored\\BankMod.csproj",
-      "projectName": "BankModRefactored",
+      "projectName": "DynamicFinancialSystem",
       "projectPath": "f:\\agency-agents-main\\Stardew Valley bank mod refactored\\BankMod.csproj",
       "packagesPath": "C:\\Users\\you yiyun\\.nuget\\packages\\",
       "outputPath": "f:\\agency-agents-main\\Stardew Valley bank mod refactored\\obj\\",

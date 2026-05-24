@@ -20,6 +20,11 @@ public class CompanyManager : ICompanyManager
     private readonly ModConfig _config;
     private readonly IMonitor _monitor;
 
+    // Stage 14 route effects
+    public bool PierreSuppressionDisabled { get; set; }
+    public bool JojaSuppressionBoosted { get; set; }
+    public bool PierreSuppressionBoosted { get; set; }
+
     private const int MaxDynamicCompanies = 4;
     private const int MaxNewPerSeason = 2;
     private const int NewCompanyProtectionDays = 3;
@@ -59,6 +64,9 @@ public class CompanyManager : ICompanyManager
         // Step 2: Reset seasonal spawn counter if season changed
         ResetSeasonalSpawnCounter(account);
 
+        // Step 2.5: Season transition — start or progress the 3-day watch period
+        ProcessSeasonTransition(account);
+
         // Step 3: Check for new dynamic company generation
         CheckAndGenerateNewCompanies(account);
 
@@ -83,6 +91,9 @@ public class CompanyManager : ICompanyManager
 
         UpdateCompanyStatuses(account);
         ProgressRestructuring(account);
+
+        // Re-check company generation: bankrupt companies may have freed spawn slots
+        CheckAndGenerateNewCompanies(account);
 
         // Daily status summary
         if (account.DynamicCompanies.Count > 0)
@@ -225,6 +236,15 @@ public class CompanyManager : ICompanyManager
         {
             account.DynamicCompaniesSpawnedThisSeason = 0;
             account.SpawnCounterSeason = currentSeason;
+            // Remove bankrupt companies — they become eligible for revival next season
+            account.DynamicCompanies.RemoveAll(c => c.Status == CompanyStatus.Bankrupt);
+            // Reset all crop shipment counters so companies don't immediately respawn
+            foreach (var ship in account.CropShipments)
+            {
+                ship.CumulativeSellCount = 0;
+                ship.ConsecutiveSellDays = 0;
+                ship.LastSellDay = 0;
+            }
         }
     }
 
@@ -240,8 +260,8 @@ public class CompanyManager : ICompanyManager
                 continue;
 
             if (account.DynamicCompanies.Any(c =>
-                c.CropCode == shipment.CropCode && c.Status != CompanyStatus.Bankrupt))
-                continue;
+                c.CropCode == shipment.CropCode))
+                continue; // same crop already has a company (active or bankrupt) — wait until next season
 
             if (CropDataProvider.IsExcluded(shipment.CropCode))
                 continue;
@@ -341,6 +361,9 @@ public class CompanyManager : ICompanyManager
                 }
                 continue;
             }
+
+            // Season transition: skip normal status updates during the 3-day watch
+            if (company.SeasonTransitionDays > 0) continue;
 
             var cropData = CropDataProvider.GetByCode(company.CropCode);
             double satisfaction = cropData is not null && cropData.Smax > 0
@@ -584,6 +607,7 @@ public class CompanyManager : ICompanyManager
     public void ApplySuppression(BankAccountData account, string cropCode, int quantity)
     {
         int stacksToAdd = quantity >= 50 ? 3 : quantity >= 20 ? 2 : 1;
+        int effectiveMaxStacks = (PierreSuppressionBoosted || JojaSuppressionBoosted) ? _config.SuppressMaxStacks * 2 : _config.SuppressMaxStacks;
 
         var existing = account.CropSuppressions.FirstOrDefault(s => s.CropCode == cropCode);
         if (existing is null)
@@ -592,7 +616,7 @@ public class CompanyManager : ICompanyManager
             account.CropSuppressions.Add(existing);
         }
 
-        existing.Stacks = Math.Min(existing.Stacks + stacksToAdd, _config.SuppressMaxStacks);
+        existing.Stacks = Math.Min(existing.Stacks + stacksToAdd, effectiveMaxStacks);
         existing.RemainingDays = _config.SuppressEffectDurationDays;
     }
 
@@ -659,6 +683,133 @@ public class CompanyManager : ICompanyManager
             }
         }
     }
+
+    // ============================================================================
+    // Season Transition (TV.txt 季节过渡机制)
+    // ============================================================================
+
+    private void ProcessSeasonTransition(BankAccountData account)
+    {
+        int today = (int)Game1.stats.DaysPlayed;
+        int dayOfMonth = Game1.dayOfMonth;
+        bool isFirstDay = dayOfMonth == 1;
+
+        // Day 1: start transition for all active dynamic companies (skip new/protected)
+        if (isFirstDay)
+        {
+            foreach (var dc in account.DynamicCompanies)
+            {
+                if (dc.Status == CompanyStatus.Bankrupt) continue;
+                if (dc.Status == CompanyStatus.New) continue;
+                dc.SeasonTransitionDays = 3;
+            }
+            return;
+        }
+
+        // Day 2-3: just count down, skip in UpdateCompanyStatuses
+        if (dayOfMonth <= 3)
+        {
+            foreach (var dc in account.DynamicCompanies)
+                if (dc.SeasonTransitionDays > 0) dc.SeasonTransitionDays--;
+            return;
+        }
+
+        // Day 4: process outcomes
+        if (dayOfMonth != 4) return;
+
+        var toProcess = account.DynamicCompanies
+            .Where(c => c.SeasonTransitionDays <= 0 && c.Status != CompanyStatus.Bankrupt && c.SeasonTransitionDays == 0)
+            .ToList();
+
+        // Actually, we need the ones that were IN transition (had SeasonTransitionDays > 0 at day 3)
+        // Let me just check all non-bankrupt companies
+        var transitioning = account.DynamicCompanies
+            .Where(c => c.Status != CompanyStatus.Bankrupt)
+            .ToList();
+
+        foreach (var dc in transitioning)
+        {
+            // If still in rescue restructuring, evaluate by fuel status first
+            if (dc.RestructuringDaysRemaining > 0)
+            {
+                var rcData = CropDataProvider.GetByCode(dc.CropCode);
+                if (rcData is not null && rcData.Smax > 0)
+                {
+                    double sat = dc.FuelStock / (rcData.Smax * 10.0);
+                    if (sat >= 0.80) dc.Status = CompanyStatus.Stable;
+                    else if (sat >= 0.30) dc.Status = CompanyStatus.Hungry;
+                    else dc.Status = CompanyStatus.Dying;
+                }
+            }
+
+            dc.SeasonTransitionDays = 0;
+
+            // Outcome 1: 光荣退休 (Prosperous, low shipments, 20%)
+            if (dc.Status == CompanyStatus.Prosperous)
+            {
+                var shipment = account.CropShipments.FirstOrDefault(s => s.CropCode == dc.CropCode);
+                int recentSells = shipment?.CumulativeSellCount ?? 0;
+                if (recentSells < _config.CompanySpawnRequiredSellCount && _rng.Next(100) < 20)
+                {
+                    // Return deposits
+                    var ca = account.CompanyAccounts.FirstOrDefault(a => a.CompanyName == dc.CompanyName);
+                    if (ca is not null && ca.BaseAmount > 0)
+                    {
+                        Game1.player.Money += ca.BaseAmount;
+                        Game1.chatBox?.addInfoMessage($"{dc.CompanyName} 光荣退市！存款 {ca.BaseAmount:N0} g 已退还。");
+                    }
+                    TransferLoansFromDyingCompany(account, dc);
+                    LiquidateCompany(account, dc);
+                    _monitor.Log($"[Season] {dc.CompanyName} retired honorably", LogLevel.Info);
+                    continue;
+                }
+            }
+
+            // Outcome 2: 成功转型 (Prosperous/Stable, another crop has fuel > threshold, slots full, 50%)
+            if (dc.Status == CompanyStatus.Prosperous || dc.Status == CompanyStatus.Stable)
+            {
+                var candidates = account.CropShipments
+                    .Where(s => s.CumulativeSellCount >= _config.CompanySpawnRequiredSellCount
+                        && !account.DynamicCompanies.Any(c => c.CropCode == s.CropCode && c.Status != CompanyStatus.Bankrupt))
+                    .ToList();
+                int activeCount = account.DynamicCompanies.Count(c => c.Status != CompanyStatus.Bankrupt);
+                if (candidates.Count > 0 && activeCount >= MaxDynamicCompanies && _rng.Next(100) < 50)
+                {
+                    var target = candidates[_rng.Next(candidates.Count)];
+                    string oldName = dc.CompanyName;
+                    var newCrop = CropDataProvider.GetByCode(target.CropCode);
+                    string newName = (newCrop?.DisplayName ?? target.CropCode) + "公司";
+                    dc.CropCode = target.CropCode;
+                    dc.CompanyName = newName;
+                    dc.Status = CompanyStatus.New;
+                    dc.ProtectionEndDay = (int)Game1.stats.DaysPlayed + NewCompanyProtectionDays;
+                    dc.FuelStock = (int)((newCrop?.Smax ?? 0) * 0.3 * 10);
+                    dc.PendingRescueDeposit = 0;
+                    dc.RestructuringDaysRemaining = 0;
+                    dc.AssetPoolConsumed = 0;
+                    Game1.chatBox?.addInfoMessage($"{oldName} 成功转型为 {newName}！存款和贷款已保留。");
+                    _monitor.Log($"[Season] {oldName} transformed to {newName}", LogLevel.Info);
+                    continue;
+                }
+            }
+
+            // Outcome 3: 倒闭撤退 (Hungry 60%, Dying 80%)
+            if (dc.Status == CompanyStatus.Hungry && _rng.Next(100) < 60
+                || dc.Status == CompanyStatus.Dying && _rng.Next(100) < 80)
+            {
+                Game1.chatBox?.addInfoMessage($"{dc.CompanyName} 在季节交替中倒闭撤退。");
+                TransferLoansFromDyingCompany(account, dc);
+                LiquidateCompany(account, dc);
+                _monitor.Log($"[Season] {dc.CompanyName} closed in transition", LogLevel.Info);
+                continue;
+            }
+
+            // Outcome 4: 硬撑存续
+            _monitor.Log($"[Season] {dc.CompanyName} survived season transition", LogLevel.Debug);
+        }
+    }
+
+    private static readonly Random _rng = new();
 
     // ============================================================================
     // Stage 9: Debt Transfer, Tiered Liquidation, Rescue Investment
@@ -737,6 +888,10 @@ public class CompanyManager : ICompanyManager
         company.Status = CompanyStatus.Bankrupt;
         company.BankruptcySeason = Game1.currentSeason;
         company.BankruptcyYear = Game1.year;
+
+        // Free up a spawn slot so another company can replace this one
+        if (account.DynamicCompaniesSpawnedThisSeason > 0)
+            account.DynamicCompaniesSpawnedThisSeason--;
 
         var shipment = account.CropShipments.FirstOrDefault(s => s.CropCode == company.CropCode);
         if (shipment is not null)

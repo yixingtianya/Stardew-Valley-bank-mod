@@ -35,6 +35,7 @@ internal class BankMenu : IClickableMenu
     private readonly ClickableTextureComponent _borrow14Btn;
     private readonly ClickableTextureComponent _repayBtn;
     private readonly ClickableTextureComponent _rescueBtn;
+    private readonly ClickableTextureComponent _onlineShopBtn;
     private readonly ClickableTextureComponent _loanDetailBtn;
     private readonly List<ClickableTextureComponent> _loanRepayBtns = new();
     private bool _hoverDeposit;
@@ -43,11 +44,15 @@ internal class BankMenu : IClickableMenu
     private bool _hoverBorrow14;
     private bool _hoverRepay;
     private bool _hoverRescue;
+    private bool _hoverOnlineShop;
     private bool _hoverLoanDetail;
     private Rectangle _depositRateBounds;
     private Rectangle _loanRateBounds;
     private bool _showLoanDetail;
     private int _loanScrollOffset;
+    private int _tabScrollOffset;
+    private Rectangle _tabLeftArrow;
+    private Rectangle _tabRightArrow;
 
     public BankMenu(BankAccountData account, ModConfig config, IModHelper helper, ModServices services, int selectedTab = 0)
         : base(
@@ -125,6 +130,10 @@ internal class BankMenu : IClickableMenu
             new Rectangle(centerX - btnW * 2 - gap * 2, btnY2, btnW, btnH),
             Game1.mouseCursors, new Rectangle(128, 384, 64, 64), 1f
         );
+        _onlineShopBtn = new ClickableTextureComponent(
+            new Rectangle(centerX - btnW * 2 - gap * 2, btnY2, btnW, btnH),
+            Game1.mouseCursors, new Rectangle(128, 384, 64, 64), 1f
+        );
     }
 
     private CompanyDefinition CurrentCompany => _companyList[_selectedCompanyIndex];
@@ -174,62 +183,94 @@ internal class BankMenu : IClickableMenu
         b.Draw(Game1.fadeToBlackRect, Game1.graphics.GraphicsDevice.Viewport.Bounds, Color.Black * 0.5f);
         Game1.drawDialogueBox(xPositionOnScreen, yPositionOnScreen, width, height, false, true);
 
-        // Title (moved up to make room for warning)
-        string title = "Dynamic Finance Company System";
+        // Title + author credit
+        string title = "Dynamic Financial System";
         Vector2 titleSize = Game1.dialogueFont.MeasureString(title);
         Utility.drawTextWithShadow(
             b, title, Game1.dialogueFont,
-            new Vector2(xPositionOnScreen + (width - titleSize.X) / 2, yPositionOnScreen + 10),
+            new Vector2(xPositionOnScreen + (width - titleSize.X) / 2, yPositionOnScreen + 6),
             Game1.textColor
         );
+        string credit = "by yixingtianya";
+        Vector2 creditSize = Game1.smallFont.MeasureString(credit);
+        Utility.drawTextWithShadow(b, credit, Game1.smallFont,
+            new Vector2(xPositionOnScreen + (width - creditSize.X) / 2, yPositionOnScreen + 32),
+            Color.DimGray);
 
-        // Stage 8: Warning banner between title and divider
+        // Stage 8: Warning banner below title/credit, above divider
         string warnText = "";
-        Color warnColor = Color.Red;
         if (_account.IsInBankruptcy)
-        {
-            warnText = "⚠ 破产保护 — 逾期贷款已冻结(0利息)，借款暂停，出货收入50%强制偿债";
-            warnColor = Color.Red;
-        }
+            warnText = "破产保护 - 逾期贷款已冻结(0利息)，借款暂停，出货收入50%强制偿债";
         else if (_account.IsInPrincipalDebt)
-        {
-            warnText = "⚠ 贷款逾期 — 宽限期结束后将从存款强制划扣";
-            warnColor = Color.Red;
-        }
+            warnText = "贷款逾期 - 宽限期结束后将从存款强制划扣";
         else if (_account.IsInInterestDebt)
-        {
-            warnText = "⚠ 利息欠债 — 现金不足支付贷款日息，逾期利息持续累积";
-            warnColor = Color.Red;
-        }
+            warnText = "利息欠债 - 现金不足支付贷款日息，逾期利息持续累积";
 
+        int warnY = yPositionOnScreen + 54;
         if (warnText.Length > 0)
         {
             Vector2 warnSize = Game1.smallFont.MeasureString(warnText);
-            Utility.drawTextWithShadow(b, warnText, Game1.smallFont,
-                new Vector2(xPositionOnScreen + (width - warnSize.X) / 2, yPositionOnScreen + 34),
-                warnColor);
+            b.Draw(Game1.fadeToBlackRect,
+                new Rectangle(xPositionOnScreen + 12, warnY - 2, width - 24, (int)warnSize.Y + 6),
+                Color.Maroon * 0.4f);
+            b.DrawString(Game1.smallFont, warnText,
+                new Vector2(xPositionOnScreen + (width - warnSize.X) / 2, warnY),
+                Color.Red);
+        }
+        else
+        {
+            // No warning — keep spacing consistent
         }
 
-        b.Draw(Game1.staminaRect, new Rectangle(xPositionOnScreen + 30, yPositionOnScreen + 52, width - 60, 2), Color.Gray);
+        b.Draw(Game1.staminaRect, new Rectangle(xPositionOnScreen + 30, yPositionOnScreen + 74, width - 60, 2), Color.Gray);
 
-        // Company tabs
-        int tabIndex = 0;
-        foreach (var tab in _tabButtons)
+        // Company tabs (max 4 visible, scrollable, dynamically repositioned)
+        int maxVisibleTabs = 4;
+        int tabScrollMax = Math.Max(0, _companyList.Count - maxVisibleTabs);
+        _tabScrollOffset = Math.Clamp(_tabScrollOffset, 0, tabScrollMax);
+
+        // Left arrow
+        if (tabScrollMax > 0)
         {
-            bool selected = tabIndex == _selectedCompanyIndex;
-            Color bg = selected ? Color.White : Color.LightGray * 0.5f;
-            b.Draw(Game1.staminaRect, tab.bounds, bg);
-            b.Draw(Game1.staminaRect, new Rectangle(tab.bounds.X, tab.bounds.Y, tab.bounds.Width, 2), Color.Gray);
-            b.Draw(Game1.staminaRect, new Rectangle(tab.bounds.X, tab.bounds.Y + tab.bounds.Height - 2, tab.bounds.Width, 2), Color.Gray);
-            b.Draw(Game1.staminaRect, new Rectangle(tab.bounds.X, tab.bounds.Y, 2, tab.bounds.Height), Color.Gray);
-            b.Draw(Game1.staminaRect, new Rectangle(tab.bounds.X + tab.bounds.Width - 2, tab.bounds.Y, 2, tab.bounds.Height), Color.Gray);
+            _tabLeftArrow = new Rectangle(xPositionOnScreen + 8, yPositionOnScreen + 62, 20, 30);
+            if (_tabScrollOffset > 0)
+                b.Draw(Game1.mouseCursors, _tabLeftArrow, new Rectangle(352, 495, 12, 11), Color.White);
+        }
 
-            Vector2 labelSize = Game1.smallFont.MeasureString(_companyList[tabIndex].Name);
-            float lx = tab.bounds.X + (tab.bounds.Width - labelSize.X) / 2;
-            float ly = tab.bounds.Y + (tab.bounds.Height - labelSize.Y) / 2;
-            Utility.drawTextWithShadow(b, _companyList[tabIndex].Name, Game1.smallFont,
-                new Vector2(lx, ly), selected ? Color.Black : Color.Gray);
-            tabIndex++;
+        // Draw visible tabs, repositioned from left
+        int drawX = xPositionOnScreen + 30;
+        int tabHeight = 30;
+        for (int i = 0; i < maxVisibleTabs; i++)
+        {
+            int idx = _tabScrollOffset + i;
+            if (idx >= _companyList.Count) break;
+
+            string name = _companyList[idx].Name;
+            int tabWidth = (int)Game1.smallFont.MeasureString(name).X + 24;
+            var tabRect = new Rectangle(drawX, yPositionOnScreen + 62, tabWidth, tabHeight);
+
+            bool selected = idx == _selectedCompanyIndex;
+            Color bg = selected ? Color.White : Color.LightGray * 0.5f;
+            b.Draw(Game1.staminaRect, tabRect, bg);
+            b.Draw(Game1.staminaRect, new Rectangle(tabRect.X, tabRect.Y, tabRect.Width, 2), Color.Gray);
+            b.Draw(Game1.staminaRect, new Rectangle(tabRect.X, tabRect.Y + tabRect.Height - 2, tabRect.Width, 2), Color.Gray);
+            b.Draw(Game1.staminaRect, new Rectangle(tabRect.X, tabRect.Y, 2, tabRect.Height), Color.Gray);
+            b.Draw(Game1.staminaRect, new Rectangle(tabRect.X + tabRect.Width - 2, tabRect.Y, 2, tabRect.Height), Color.Gray);
+
+            Vector2 labelSize = Game1.smallFont.MeasureString(name);
+            Utility.drawTextWithShadow(b, name, Game1.smallFont,
+                new Vector2(drawX + 12, yPositionOnScreen + 62 + (tabHeight - labelSize.Y) / 2),
+                selected ? Color.Black : Color.Gray);
+
+            drawX += tabWidth + 8;
+        }
+
+        // Right arrow
+        if (tabScrollMax > 0)
+        {
+            _tabRightArrow = new Rectangle(xPositionOnScreen + width - 28, yPositionOnScreen + 62, 20, 30);
+            if (_tabScrollOffset < tabScrollMax)
+                b.Draw(Game1.mouseCursors, _tabRightArrow, new Rectangle(365, 495, 12, 11), Color.White);
         }
 
         // === Deposit section ===
@@ -262,6 +303,14 @@ internal class BankMenu : IClickableMenu
                     CompanyStatus.Protection => ("[濒死保护期]", Color.Red),
                     _ => ("", Color.Gray)
                 };
+                // Season transition overlay
+                if (dyn.SeasonTransitionDays > 0)
+                {
+                    statusText = statusText.Length > 0
+                        ? statusText.TrimEnd(']') + $" | 季节观望剩{dyn.SeasonTransitionDays}天]"
+                        : $"[季节观望·剩 {dyn.SeasonTransitionDays} 天]";
+                    statusColor = Color.DarkCyan;
+                }
                 if (statusText.Length > 0)
                 {
                     DrawInfoLine(b, statusText, infoX + 20, infoY + lineH, statusColor);
@@ -377,7 +426,8 @@ internal class BankMenu : IClickableMenu
                 else
                 {
                     dueColor = daysLeft <= 2 ? Color.DarkOrange : Color.DimGray;
-                    dueStr = $"距还款日：{daysLeft} 天 (第 {loan.DueDay} 天)";
+                    int dueDayOfSeason = ((loan.DueDay - 1) % 28) + 1;
+                    dueStr = $"距还款日：{daysLeft} 天 (第 {dueDayOfSeason} 天)";
                 }
                 DrawInfoLine(b, dueStr, infoX + 20, loanY + lineH * nextLine, dueColor);
                 nextLine++;
@@ -477,12 +527,14 @@ internal class BankMenu : IClickableMenu
                     }
                     else if (l.IsInDefault)
                     {
-                        header = $"#{idx + 1}  借{l.RepaymentPeriodDays}天  |  到期第{l.DueDay}天（宽限期剩{l.DefaultDaysRemaining}天）";
+                        int dd1 = ((l.DueDay - 1) % 28) + 1;
+                        header = $"#{idx + 1}  借{l.RepaymentPeriodDays}天  |  到期第{dd1}天（宽限期剩{l.DefaultDaysRemaining}天）";
                         headerColor = Color.Red;
                     }
                     else
                     {
-                        header = $"#{idx + 1}  借{l.RepaymentPeriodDays}天  |  到期第{l.DueDay}天（剩{daysLeft}天）";
+                        int dd2 = ((l.DueDay - 1) % 28) + 1;
+                        header = $"#{idx + 1}  借{l.RepaymentPeriodDays}天  |  到期第{dd2}天（剩{daysLeft}天）";
                         headerColor = daysLeft <= 2 ? Color.Orange : Color.Gold;
                     }
                     DrawInfoLine(b, header, infoX + 8, ey + 6, headerColor);
@@ -511,6 +563,12 @@ internal class BankMenu : IClickableMenu
         DrawTextButton(b, _borrow14Btn, "借14天", _hoverBorrow14, Color.DarkRed);
         DrawTextButton(b, _repayBtn, "还款", _hoverRepay, Color.OrangeRed);
         DrawTextButton(b, _loanDetailBtn, _showLoanDetail ? "摘要" : "明细", _hoverLoanDetail, Color.DarkCyan);
+
+        // Stage 14: online shopping button
+        if (_services.OnlineShoppingUnlocked)
+        {
+            DrawTextButton(b, _onlineShopBtn, "网购", _hoverOnlineShop, Color.DarkCyan);
+        }
 
         // Stage 9: rescue invest button when company is Dying (restructuring)
         var dyn2 = _account.DynamicCompanies.FirstOrDefault(c => c.CompanyName == CurrentCompany.Name);
@@ -551,21 +609,41 @@ internal class BankMenu : IClickableMenu
             return;
         }
 
-        for (int i = 0; i < _tabButtons.Count; i++)
+        // Tab click — use same dynamic positioning as draw
+        int tabX = xPositionOnScreen + 30;
+        for (int i = _tabScrollOffset; i < Math.Min(_companyList.Count, _tabScrollOffset + 4); i++)
         {
-            if (_tabButtons[i].containsPoint(x, y) && i != _selectedCompanyIndex)
+            int tabWidth = (int)Game1.smallFont.MeasureString(_companyList[i].Name).X + 24;
+            var rect = new Rectangle(tabX, yPositionOnScreen + 62, tabWidth, 30);
+            if (rect.Contains(x, y) && i != _selectedCompanyIndex)
             {
                 Game1.playSound("smallSelect");
                 _selectedCompanyIndex = i;
                 return;
             }
+            tabX += tabWidth + 8;
+        }
+
+        // Tab scroll arrows
+        if (_tabLeftArrow.Contains(x, y) && _tabScrollOffset > 0)
+        {
+            Game1.playSound("smallSelect");
+            _tabScrollOffset--;
+            return;
+        }
+        if (_tabRightArrow.Contains(x, y) && _tabScrollOffset < Math.Max(0, _companyList.Count - 4))
+        {
+            Game1.playSound("smallSelect");
+            _tabScrollOffset++;
+            return;
         }
 
         if (_depositBtn.containsPoint(x, y))
         {
-            if (!Context.IsMainPlayer)
+            if (!Context.IsMainPlayer && !_services.StandaloneMode)
             {
-                Game1.chatBox?.addErrorMessage("多人模式功能开发中，请由主机操作。");
+                _services.SendRemoteOperation?.Invoke("Deposit", CurrentCompany.Name, 0, null);
+                Game1.chatBox?.addInfoMessage("多人模式：存款操作已发送至主机处理。");
                 return;
             }
             Game1.playSound("bigSelect");
@@ -761,6 +839,54 @@ internal class BankMenu : IClickableMenu
             Game1.playSound("smallSelect");
             _showLoanDetail = !_showLoanDetail;
             _loanScrollOffset = 0;
+            return;
+        }
+
+        // Stage 14: online shopping button
+        if (_services.OnlineShoppingUnlocked && _onlineShopBtn.containsPoint(x, y))
+        {
+            Game1.playSound("bigSelect");
+            var shopList = new List<Response>();
+            foreach (var sid in _config.OnlineShopList)
+            {
+                // CC route: Joja超市已不存在
+                if (sid == "Joja" && _services.PierreBoosted)
+                    continue;
+                string name = sid switch
+                {
+                    "SeedShop" => "皮埃尔杂货店", "Blacksmith" => "铁匠铺", "Carpenter" => "木匠铺",
+                    "Joja" => "Joja超市", "IslandTrade" => "姜岛商人", "DesertTrade" => "沙漠商人",
+                    _ => sid
+                };
+                string? closed = GetShopClosedReason(sid);
+                if (closed != null)
+                    name += $" [{closed}]";
+                shopList.Add(new Response(sid, name));
+            }
+            shopList.Add(new Response("Cancel", "取消"));
+            Game1.currentLocation.createQuestionDialogue("选择网购店铺：", shopList.ToArray(), (_, answer) =>
+            {
+                if (answer != "Cancel")
+                {
+                    string? closed = GetShopClosedReason(answer);
+                    if (closed != null)
+                    {
+                        Game1.chatBox?.addErrorMessage("该商店未营业" + (closed.Length > 0 ? $"（{closed}）" : ""));
+                        return;
+                    }
+                    if (_config.EnableDeliveryFee)
+                    {
+                        int fee = _config.DeliveryFeeFlat > 0 ? _config.DeliveryFeeFlat : 0;
+                        if (Game1.player.Money < fee)
+                        {
+                            Game1.chatBox?.addErrorMessage("余额不足，无法支付运费！");
+                            return;
+                        }
+                        if (fee > 0) Game1.player.Money -= fee;
+                    }
+                    Utility.TryOpenShopMenu(answer, "BankMod");
+                }
+            });
             return;
         }
 
@@ -994,6 +1120,12 @@ internal class BankMenu : IClickableMenu
         _hoverBorrow14 = _borrow14Btn.containsPoint(x, y);
         _hoverRepay = _repayBtn.containsPoint(x, y);
         _hoverRescue = _rescueBtn.containsPoint(x, y);
+        _hoverOnlineShop = _onlineShopBtn.containsPoint(x, y);
         _hoverLoanDetail = _loanDetailBtn.containsPoint(x, y);
+    }
+
+    private string? GetShopClosedReason(string shopId)
+    {
+        return _services.StoreHoursService.GetClosedReason(shopId);
     }
 }

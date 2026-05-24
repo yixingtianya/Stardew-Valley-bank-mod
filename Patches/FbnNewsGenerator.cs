@@ -24,12 +24,17 @@ internal static class FbnNewsGenerator
         bool luckWeatherEnabled = _c.EnableLuckInfluence || _c.EnableWeatherInfluence;
 
         lines.Add("=== FBN · 芬吉尔共和国商业财经频道 ===");
-        lines.Add("主播：巴德·坦纳顿");
+        lines.Add("主播：巴德·坦纳顿  |  mod by yixingtianya");
 
         if (TryBundleNews(lines)) return lines;
         if (TrySpecialDateNews(lines, today)) return lines;
+        if (TrySeasonTransitionNews(lines, account)) return lines;
         if (TryCompanyBirthNews(lines, account, today)) return lines;
         if (TryGlobalEventNews(lines, account, tomorrowWeather)) return lines;
+
+        // Season transition daily snippets (Day 1-3, doesn't block forecast)
+        int doy = Game1.dayOfMonth;
+        if (doy >= 1 && doy <= 3) AddSeasonDailySnippet(lines, doy);
 
         if (luckWeatherEnabled)
             GetForecastNews(lines, account, tomorrowWeather);
@@ -87,6 +92,125 @@ internal static class FbnNewsGenerator
             return true;
         }
         return false;
+    }
+
+    // ====== 季节过渡特别节目 (Day 4 morning, priority: below 三, above 二) ======
+    private static bool TrySeasonTransitionNews(List<string> lines, BankAccountData account)
+    {
+        if (Game1.dayOfMonth != 4) return false;
+
+        var transitioning = account.DynamicCompanies
+            .Where(c => c.Status != CompanyStatus.Bankrupt && c.Status != CompanyStatus.New)
+            .ToList();
+
+        lines.Add(""); lines.Add("");
+        lines.Add("--- 《季节交替·公司去向特别报道》 ---");
+
+        // TV.txt 一、节目开场（每季固定）
+        string season = Game1.currentSeason;
+        if (season == "spring")
+        {
+            lines.Add("冬天终于过去了。巴德·坦纳顿为您播报FBN季节交替特别节目。");
+            lines.Add("上季度的动态公司们，在春天里发芽，现在要在夏天的热浪中决定去留。");
+        }
+        else if (season == "summer")
+        {
+            lines.Add("夏季的热浪逐渐退去，秋天的风带来了收获，也带来了清算。");
+            lines.Add("巴德·坦纳顿为您盘点那些在夏天成长起来的公司。");
+        }
+        else if (season == "fall")
+        {
+            lines.Add("收官的季节。所有在秋天达到巅峰的公司，现在必须面对一个残酷的问题：");
+            lines.Add("冬天来了，你还能活下去吗？巴德·坦纳顿为您带来最全面的去向报道。");
+        }
+        else
+        {
+            lines.Add("漫长冬天终于结束。当第一缕春风吹过鹈鹕镇，我们不禁要问——");
+            lines.Add("那些在寒冬中沉睡的公司，是否还有苏醒的可能？巴德·坦纳顿，开春特别报道。");
+        }
+        lines.Add("");
+
+        if (transitioning.Count == 0)
+        {
+            lines.Add("本季无参与观望期的公司。市场平静过渡。");
+            return true;
+        }
+
+        lines.Add("巴德·坦纳顿为您盘点那些在季节交替中做出抉择的公司。");
+        lines.Add("");
+
+        foreach (var dc in transitioning)
+        {
+            var cd = CropDataProvider.GetByCode(dc.CropCode);
+            string name = cd?.DisplayName ?? dc.CropCode;
+
+            if (dc.Status == CompanyStatus.Prosperous)
+                lines.Add($"{dc.CompanyName} [繁荣] — 表现强劲，有望继续运营或光荣退休。");
+            else if (dc.Status == CompanyStatus.Stable)
+                lines.Add($"{dc.CompanyName} [稳定] — 稳健经营中，转型窗口仍在。");
+            else if (dc.Status == CompanyStatus.Hungry)
+                lines.Add($"{dc.CompanyName} [饥饿] — 货源紧张，面临撤退风险。");
+            else if (dc.Status == CompanyStatus.Dying)
+                lines.Add($"{dc.CompanyName} [濒危] — 断供边缘，命悬一线。");
+        }
+
+        lines.Add("");
+        lines.Add("刘易斯镇长：'感谢每位农场主的参与。新的季节，新的开始。'");
+        return true;
+    }
+
+    private static string GetPreviousSeasonName()
+    {
+        return Game1.currentSeason switch
+        {
+            "summer" => "春天", "fall" => "夏天", "winter" => "秋天", _ => "冬天"
+        };
+    }
+
+    /// <summary>Day 1-3 season transition daily snippet (TV.txt 六). Added before forecast, doesn't block.</summary>
+    private static void AddSeasonDailySnippet(List<string> lines, int dayOfMonth)
+    {
+        lines.Add("");
+        switch (dayOfMonth)
+        {
+            case 1:
+                string season = Game1.currentSeason;
+                if (season == "spring")
+                {
+                    lines.Add("冬天终于过去了。巴德·坦纳顿为您播报FBN季节交替特别节目。");
+                    lines.Add("上季度的动态公司们，在春天里发芽，现在要在夏天的热浪中决定去留。");
+                    lines.Add("让我们看看哪些公司挺过来了，哪些永远留在了春天。");
+                }
+                else if (season == "summer")
+                {
+                    lines.Add("夏季的热浪逐渐退去，秋天的风带来了收获，也带来了清算。");
+                    lines.Add("巴德·坦纳顿为您盘点那些在夏天成长起来的公司，");
+                    lines.Add("它们中有谁能走进金色的秋天——又有谁，只能在夏日的余晖中告别。");
+                }
+                else if (season == "fall")
+                {
+                    lines.Add("收官的季节。所有在秋天达到巅峰的公司，");
+                    lines.Add("现在必须面对一个残酷的问题：冬天来了，你还能活下去吗？");
+                    lines.Add("巴德·坦纳顿为您带来最全面的季节公司去向报道。");
+                }
+                else
+                {
+                    lines.Add("漫长冬天终于结束。当第一缕春风吹过鹈鹕镇，我们不禁要问——");
+                    lines.Add("那些在寒冬中沉睡的公司，是否还有苏醒的可能？");
+                    lines.Add("还是说，冬天已经帮他们写好了结局。巴德·坦纳顿，开春特别报道。");
+                }
+                break;
+            case 2:
+                lines.Add("过渡期过半。一些公司开始出现分化。");
+                lines.Add("有迹象表明，部分公司正在积极筹备转型，而另一些似乎已放弃挣扎。");
+                lines.Add("——玛妮插播：'猪猪们觉得焦虑。它们不喜欢等待。我也是。'");
+                break;
+            case 3:
+                lines.Add("明天早晨的特别节目，将公布所有上季公司的最终去向。");
+                lines.Add("今晚，请农场主们检查存款和贷款账户。");
+                lines.Add("——或者，只是静静等待明天的结果。");
+                break;
+        }
     }
 
     // ====== 二: 动态公司诞生微讯 ======
