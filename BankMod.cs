@@ -20,13 +20,14 @@ internal sealed class BankMod : Mod
     /*********
     ** Constants
     *********/
-    private const string PhoneReceivedFlag = "bankmod_phone_status";
+    private const string PhoneReceivedFlag = MailFlags.Save_PhoneReceived;
 
     // V3.3 联机消息类型常量
     private const string MsgConfigSync = "ConfigSync";
     private const string MsgBankOperation = "BankOperation";
     private const string MsgBankDataSync = "BankDataSync";
     private const string MsgBankSnapshot = "BankSnapshot";
+    private const string MsgAccountMigration = "AccountMigration";
 
     /*********
     ** Fields
@@ -44,17 +45,22 @@ internal sealed class BankMod : Mod
     private bool _lastKnownSeparateWallets; // V3.3 勘误六：分家状态变化检测（阶段十三实现）
 #pragma warning restore CS0169
     private Dictionary<string, int>? _preShopInventory; // Stage 7.3 shop sale detection
+    private bool _standaloneMode; // 客机独立运行（房主未装mod）
+    private bool _configSyncReceived = false; // 是否收到过ConfigSync
+    private int _standaloneCheckTicks; // 独立模式检测计时器
     private bool _shopIsJoja; // 记录当前商店是否为 Joja
     private int _lastMoneySnapshot;
     private int _bankruptGarnishCooldown;
     private bool _bankruptExitMessageShown;
-    private bool _wasBankruptThisSession;
     private bool _pendingPierreMail;
     private bool _pendingMorrisMail;
     private readonly Vector2 _jojaMarkerTile = new(27, 7); // JojaMart supply shelf
     private const string MorrisEventKey = "BankMod.MorrisSampleBasket";
     private bool _waitingForMorrisEventEnd;
     private bool _morrisEventSeen;
+    private bool _shopIntercepted;
+    private bool _shopSkipped;
+    private string _pendingShopId = "";
     private Vector2? _morrisOriginalPos;
 
     private const string MorrisEventScript =
@@ -88,12 +94,14 @@ internal sealed class BankMod : Mod
         helper.Events.GameLoop.SaveLoaded += OnSaveLoaded;
         helper.Events.GameLoop.DayStarted += OnDayStarted;
         helper.Events.GameLoop.UpdateTicked += OnUpdateTicked;
+        helper.Events.GameLoop.OneSecondUpdateTicked += OnOneSecondUpdateTicked;
         helper.Events.GameLoop.GameLaunched += OnGameLaunched;
         helper.Events.GameLoop.DayEnding += OnDayEnding;
+        helper.Events.GameLoop.Saving += OnSaving;
         helper.Events.Display.MenuChanged += OnMenuChanged;
         helper.Events.Player.InventoryChanged += OnInventoryChanged;
+        helper.Events.Player.Warped += OnWarped;
         helper.Events.Display.RenderedWorld += OnRenderedWorld;
-        helper.Events.Display.RenderedHud += OnRenderedHud;
         helper.Events.Input.ButtonPressed += OnButtonPressed;
         helper.Events.Content.AssetRequested += OnAssetRequested;
 
@@ -101,11 +109,68 @@ internal sealed class BankMod : Mod
         helper.Events.Multiplayer.PeerConnected += OnPeerConnected;
         helper.Events.Multiplayer.ModMessageReceived += OnModMessageReceived;
 
+        // Stage 13: Wire remote operation callback
+        _services.SendRemoteOperation = (op, company, amount, target) =>
+        {
+            var req = new Messages.BankOperationRequest
+            {
+                Operation = op, CompanyName = company, Amount = amount,
+                SenderId = Game1.player.UniqueMultiplayerID, TargetPlayer = target
+            };
+            Helper.Multiplayer.SendMessage(req, MsgBankOperation, null, null);
+            Monitor.Log($"[联机] 发送操作请求: {op} {company} {amount}", LogLevel.Debug);
+        };
+
         // Stage 10: TV financial channel Harmony patches
         var tvHarmony = new HarmonyLib.Harmony("bankmod.tv");
         tvHarmony.PatchAll(typeof(Patches.TVPatch).Assembly);
         Patches.FbnNewsGenerator.Initialize(_services, _config);
         Monitor.Log("[TV] FBN channel Harmony patches applied", LogLevel.Debug);
+
+        // Console command: debug season shop
+        helper.ConsoleCommands.Add("season_shop_debug", "查看当前季节可采购的农产品筛选过程", (cmd, args) =>
+        {
+            if (!Context.IsWorldReady) { Monitor.Log("需要加载存档。", LogLevel.Warn); return; }
+            string season = Game1.currentSeason;
+            string seasonKey = season switch { "spring" => "Spring", "summer" => "Summer", "fall" => "Fall", "winter" => "Winter", _ => season };
+            Monitor.Log($"当前季节: {season}, 第{Game1.dayOfMonth}天", LogLevel.Info);
+
+            var bundleCrops = new HashSet<string> { "Parsnip", "Green Bean", "Cauliflower", "Potato", "Blueberry", "Melon", "Hot Pepper", "Tomato", "Corn", "Eggplant", "Pumpkin", "Yam", "Wheat", "Poppy", "Sunflower" };
+
+            var all = CropDataProvider.AllCrops;
+            Monitor.Log($"全部作物: {all.Count} 种", LogLevel.Info);
+
+            foreach (var cd in all)
+            {
+                bool inSeason = cd.Season.Contains(seasonKey, StringComparison.OrdinalIgnoreCase);
+                bool hasR = cd.R > 0;
+                bool isPurchase = cd.IsPurchasable;
+                bool notBundle = !bundleCrops.Contains(cd.CropCode);
+
+                if (!inSeason) continue;
+                Monitor.Log($"  {cd.CropCode}({cd.DisplayName}): 当季={inSeason} R={cd.R:F2}({hasR}) 可购={isPurchase} 非献祭={notBundle}", LogLevel.Info);
+            }
+        });
+
+        // Console command: set company fuel
+        helper.ConsoleCommands.Add("set_fuel", "设置指定动态公司的燃料点数\n用法: set_fuel <公司名或作物名> <燃料点(FP)>\n例: set_fuel 土豆 500", (cmd, args) =>
+        {
+            if (args.Length < 2) { Monitor.Log("用法: set_fuel <公司名> <燃料FP>", LogLevel.Info); return; }
+            if (!Context.IsWorldReady) { Monitor.Log("需要加载存档后再用。", LogLevel.Warn); return; }
+
+            string name = args[0];
+            if (!int.TryParse(args[1], out int fuel)) { Monitor.Log("燃料值必须为整数", LogLevel.Warn); return; }
+
+            var account = _services.BankAccountService.Load();
+            var dc = account.DynamicCompanies.FirstOrDefault(
+                c => c.CompanyName.Contains(name, StringComparison.OrdinalIgnoreCase)
+                  || c.CropCode.Equals(name, StringComparison.OrdinalIgnoreCase));
+            if (dc is null) { Monitor.Log($"未找到公司: {name}", LogLevel.Warn); return; }
+
+            dc.FuelStock = fuel;
+            _services.BankAccountService.Save(account);
+            Monitor.Log($"{dc.CompanyName} 燃料设为 {fuel} FP", LogLevel.Info);
+        });
 
         _lastLocationName = null;
 
@@ -134,10 +199,15 @@ internal sealed class BankMod : Mod
         }
     }
 
+    private void OnSaving(object? sender, SavingEventArgs e)
+    {
+        _services.RouteService.SaveToSave(Helper);
+    }
+
     private void OnDayEnding(object? sender, DayEndingEventArgs e)
     {
         if (!Context.IsWorldReady || Game1.player is null) return;
-        if (!Context.IsMainPlayer) return;
+        if (!Context.IsMainPlayer && !_standaloneMode) return;
 
         // Remove phones from shipping bin (phones are unsellable by design)
         var shippingBin = Game1.getFarm().getShippingBin(Game1.player);
@@ -211,14 +281,15 @@ internal sealed class BankMod : Mod
             {
                 var mailData = assets.AsDictionary<string, string>();
                 // BankMod_Letter 始终注册（欢迎信，内容固定）
-                mailData.Data["BankMod_Letter"] = "亲爱的玩家, 欢迎来到星露谷银行!^我们已经为您准备了专属手机, 随信附上, 请查收!";
+                mailData.Data[MailFlags.BankMod_Letter] = "亲爱的玩家, 欢迎来到星露谷银行!^我们已经为您准备了专属手机, 随信附上, 请查收!";
+
 
                 // Pierre/Morris 信件直接注册中文内容，由原版 LetterViewerMenu 渲染
                 // SMAPI 中文版已替换 Game1.smallFont 为支持中文的字体
-                if (!mailData.Data.ContainsKey("BankMod.PierreThanks"))
-                    mailData.Data["BankMod.PierreThanks"] = "占位^Pierre信件";
-                if (!mailData.Data.ContainsKey("BankMod.MorrisThanks"))
-                    mailData.Data["BankMod.MorrisThanks"] = "占位^Morris信件";
+                if (!mailData.Data.ContainsKey(MailFlags.BankMod_PierreThanks))
+                    mailData.Data[MailFlags.BankMod_PierreThanks] = "占位^Pierre信件";
+                if (!mailData.Data.ContainsKey(MailFlags.BankMod_MorrisThanks))
+                    mailData.Data[MailFlags.BankMod_MorrisThanks] = "占位^Morris信件";
 
                 // 如果存档中有真实信件内容，用真实内容覆盖占位
                 BankAccountData? acc = null;
@@ -227,15 +298,30 @@ internal sealed class BankMod : Mod
                 {
                     Monitor.Log($"[AssetRequested] Data/mail loading: PierreText='{(acc.PierreThanksLetterText?.Length > 0 ? acc.PierreThanksLetterText.Substring(0, Math.Min(30, acc.PierreThanksLetterText.Length)) + "..." : "null")}', MorrisText='{(acc.MorrisThanksLetterText?.Length > 0 ? acc.MorrisThanksLetterText.Substring(0, Math.Min(30, acc.MorrisThanksLetterText.Length)) + "..." : "null")}'", LogLevel.Info);
                     if (!string.IsNullOrEmpty(acc.PierreThanksLetterText))
-                        mailData.Data["BankMod.PierreThanks"] = NormalizeMailText(acc.PierreThanksLetterText);
+                        mailData.Data[MailFlags.BankMod_PierreThanks] = NormalizeMailText(acc.PierreThanksLetterText);
                     if (!string.IsNullOrEmpty(acc.MorrisThanksLetterText))
-                        mailData.Data["BankMod.MorrisThanks"] = NormalizeMailText(acc.MorrisThanksLetterText);
+                        mailData.Data[MailFlags.BankMod_MorrisThanks] = NormalizeMailText(acc.MorrisThanksLetterText);
                 }
                 else
                 {
                     Monitor.Log($"[AssetRequested] Data/mail loading: acc is null", LogLevel.Warn);
                 }
             });
+        }
+
+        // Register custom Junimo sprites under both simple name (for temporaryAnimatedSprite)
+        // and Characters/<name> (for addTemporaryActor)
+        foreach (var name in JunimoSprites)
+        {
+            if (e.NameWithoutLocale.IsEquivalentTo(name) || e.NameWithoutLocale.IsEquivalentTo($"Characters/{name}"))
+            {
+                var n = name; // capture for closure
+                e.LoadFrom(() =>
+                {
+                    string p = Path.Combine(Helper.DirectoryPath, "assets", $"{n}.png");
+                    return File.Exists(p) ? Texture2D.FromFile(Game1.graphics.GraphicsDevice, p) : null;
+                }, AssetLoadPriority.Medium);
+            }
         }
     }
 
@@ -267,6 +353,15 @@ internal sealed class BankMod : Mod
             return new Texture2D(gd, 16, 16);
         }
     }
+
+    /// <summary>Custom Junimo sprites registered as Characters/znm* for addTemporaryActor event commands.</summary>
+    private static readonly string[] JunimoSprites =
+    {
+        "znm", "znm1", "znm2",
+        "znmf", "znm1f", "znm2f",
+        "znmh", "znm1h", "znm2h",
+        "znmz", "znm1z", "znm2z",
+    };
 
     private void RegisterModConfig(IGenericModConfigMenuApi gmcm)
     {
@@ -625,7 +720,31 @@ internal sealed class BankMod : Mod
         _phoneReceivedToday = false;
         _lastReadMail = null;
         _lastMoneySnapshot = Game1.player?.Money ?? 0;
-        _morrisEventSeen = Helper.Data.ReadSaveData<string>("bankmod_morris_event_seen") == "1";
+
+        // Stage 14: Route check
+        _services.RouteService.LoadFromSave(Helper);
+        _services.RouteService.DetectRoute();
+        if (!string.IsNullOrEmpty(_services.RouteService.CompletedRoute))
+        {
+            _services.RouteService.ApplyRouteEffects();
+            _services.RouteService.SaveToSave(Helper);
+            if (_services.RouteService.CompletedRoute == "Joja"
+                && !_services.RouteService.SeenCutscene
+                && !_services.RouteService.OnlineShoppingUnlocked)
+                _oldSavePending = true;
+            else if (_services.RouteService.CompletedRoute == "Community")
+            {
+                bool hasMovieTheater = Game1.player.hasOrWillReceiveMail(MailFlags.CC_MovieTheater) || Game1.player.mailReceived.Contains(MailFlags.CC_MovieTheater);
+                if (hasMovieTheater)
+                {
+                    _services.RouteService.MarkCutsceneSeen();
+                    _services.RouteService.UnlockOnlineShopping();
+                    _services.RouteService.SaveToSave(Helper);
+                    Monitor.Log("[Stage14] CC old save: Movie Theater, skipping event", LogLevel.Info);
+                }
+            }
+        }
+        _morrisEventSeen = Helper.Data.ReadSaveData<string>(MailFlags.Save_MorrisEventSeen) == "1";
         string? phoneFlag = Helper.Data.ReadSaveData<string>(PhoneReceivedFlag);
         _hasReceivedPhoneInSession = (phoneFlag == "1");
 
@@ -637,17 +756,36 @@ internal sealed class BankMod : Mod
         Monitor.Log("Save loaded, BankMod ready", LogLevel.Info);
     }
 
+    private void OnOneSecondUpdateTicked(object? sender, OneSecondUpdateTickedEventArgs e)
+    {
+        // Stage 13: Standalone mode detection for guests (once per second)
+        if (!Context.IsMainPlayer && !_configSyncReceived && _standaloneCheckTicks > 0)
+        {
+            _standaloneCheckTicks--;
+            if (_standaloneCheckTicks <= 0)
+            {
+                _standaloneMode = true;
+                _services.StandaloneMode = true;
+                Monitor.Log("[MP] ConfigSync timeout (5s) - host does not have mod. Entering standalone mode.", LogLevel.Warn);
+                Game1.chatBox?.addInfoMessage("[BankMod] 检测到房主未安装此Mod，将以独立模式运行。");
+            }
+        }
+    }
+
     private void OnDayStarted(object? sender, DayStartedEventArgs e)
     {
         if (!Context.IsWorldReady || Game1.player is null)
             return;
 
-        // V3.3 客机跳过日结算（所有金融逻辑由主机执行后广播）
-        if (!Context.IsMainPlayer)
+        // V3.3 客机跳过日结算（除非在独立模式）
+        if (!Context.IsMainPlayer && !_standaloneMode)
         {
-            Monitor.Log("Skipping day-started logic (not main player)");
+            Monitor.Log("Skipping day-started logic (not main player, not standalone)");
             return;
         }
+        int preStandaloneGold = Game1.player.Money;
+        if (_standaloneMode)
+            Monitor.Log("[MP] Running day-started in standalone mode", LogLevel.Info);
 
         Monitor.Log("New day started", LogLevel.Info);
 
@@ -669,25 +807,26 @@ internal sealed class BankMod : Mod
 
         string? phoneFlag = Helper.Data.ReadSaveData<string>(PhoneReceivedFlag);
 
-        // Catch phone loss that happened while a menu was open (inventory trash, etc.)
-        // OnInventoryChanged skips detection when Game1.activeClickableMenu is not null,
-        // so the flag may still be "1" even though the phone is gone.
-        if (phoneFlag == "1" && !PlayerHasPhone())
+        // Phone lost detection: player picked up phone (seen in inventory) but
+        // it's gone now and was never put in a chest → truly discarded
+        if (phoneFlag == "1" && _phoneSeenInInventory && !_phonePutInChest && !PlayerHasPhone())
         {
             Helper.Data.WriteSaveData(PhoneReceivedFlag, "0");
             phoneFlag = "0";
             _phoneReceivedToday = false;
             _lastReadMail = null;
-            Monitor.Log("Phone flag was 1 but phone missing from inventory — corrected to 0", LogLevel.Warn);
+            Monitor.Log("Phone confirmed lost (seen then missing, not in chest) — status reset to 0", LogLevel.Warn);
         }
+        _phoneSeenInInventory = false;
+        _phonePutInChest = false;
 
         if (phoneFlag != "1")
         {
             bool hasReceivedPhoneBefore = _hasReceivedPhoneInSession ||
-                (Game1.player.mailReceived?.Contains("BankMod_Letter") == true);
-            if (hasReceivedPhoneBefore && !Game1.player.mailbox.Contains("BankMod_Letter"))
+                (Game1.player.mailReceived?.Contains(MailFlags.BankMod_Letter) == true);
+            if (hasReceivedPhoneBefore && !Game1.player.mailbox.Contains(MailFlags.BankMod_Letter))
             {
-                Game1.player.mailbox.Add("BankMod_Letter");
+                Game1.player.mailbox.Add(MailFlags.BankMod_Letter);
                 _lastReadMail = null; // 新信件入队，重置读取检测状态
                 Monitor.Log("Phone lost previously, sending new claim letter to mailbox", LogLevel.Info);
             }
@@ -697,7 +836,37 @@ internal sealed class BankMod : Mod
         _services.CompanyManager.OnDayStarted();
 
         // Snapshot money for bankruptcy garnishment tracking
+        if (_standaloneMode && Game1.player.Money != preStandaloneGold)
+            Monitor.Log($"[MP] Standalone gold change: {preStandaloneGold} -> {Game1.player.Money} (delta={Game1.player.Money - preStandaloneGold})", LogLevel.Warn);
         _lastMoneySnapshot = Game1.player.Money;
+
+        // Stage 13: Broadcast daily snapshot to all clients
+        if (Context.IsMainPlayer && Game1.IsMultiplayer)
+        {
+            var snapAccount = _services.BankAccountService.Load();
+            var snap = new Messages.BankSnapshot
+            {
+                IsInBankruptcy = snapAccount.IsInBankruptcy,
+                PlayerMoney = Game1.player.Money,
+                Companies = new List<Messages.CompanySnapshot>()
+            };
+            var allCompanies = _services.CompanyManager.GetAllCompanyDefinitions(snapAccount);
+            foreach (var c in allCompanies)
+            {
+                var ca = snapAccount.CompanyAccounts.FirstOrDefault(a => a.CompanyName == c.Name);
+                snap.Companies.Add(new Messages.CompanySnapshot
+                {
+                    Name = c.Name,
+                    Status = account.DynamicCompanies.FirstOrDefault(d => d.CompanyName == c.Name)?.Status.ToString() ?? "Active",
+                    DepositRate = c.DepositInterestRate,
+                    LoanRate = c.LoanInterestRate,
+                    DepositBalance = ca?.DepositBalance ?? 0,
+                    LoanPrincipal = account.Loans.Where(l => l.CompanyName == c.Name).Sum(l => l.Principal)
+                });
+            }
+            Helper.Multiplayer.SendMessage(snap, MsgBankSnapshot, null, null);
+            Monitor.Log("[联机] 快照已广播", LogLevel.Debug);
+        }
     }
 
     private void OnMenuChanged(object? sender, MenuChangedEventArgs e)
@@ -710,16 +879,62 @@ internal sealed class BankMod : Mod
             return;
         }
 
-        // Stage 7.3: shop sale detection — snapshot inventory when shop opens
+        // Stage 11 + 7.3: shop handling
         if (e.NewMenu is StardewValley.Menus.ShopMenu shopMenu && Context.IsMainPlayer)
         {
+            string shopId = shopMenu.ShopId ?? "";
+            int day = Game1.dayOfMonth;
+
+            // Stage 7: Intercept Joja/Pierre shop → ask purpose
+            bool isJojaOrPierre = shopId.Contains("Joja") || Game1.currentLocation?.Name == "JojaMart";
+            bool isPierre = shopId == "SeedShop" || Game1.currentLocation?.Name == "SeedShop";
+            bool isJoja = shopId.Contains("Joja") || Game1.currentLocation?.Name == "JojaMart";
+            // CC route: Joja loses suppression; Joja route: Pierre loses suppression
+            bool suppressDisabled = (isPierre && _services.JojaBoosted) || (isJoja && _services.PierreBoosted);
+            if (isJojaOrPierre && !_shopIntercepted && !_shopSkipped)
+            {
+                _shopIntercepted = true;
+                _pendingShopId = shopId;
+                Game1.activeClickableMenu = null;
+                var responses = new List<Response> { new("Shop", "购买商品") };
+                if (!suppressDisabled)
+                    responses.Add(new("Supply", "出售农产品（打压竞争对手）"));
+                Game1.currentLocation.createQuestionDialogue(
+                    "欢迎光临！请问您需要什么服务？",
+                    responses.ToArray(),
+                    (_, answer) =>
+                    {
+                        _shopIntercepted = false;
+                        if (answer == "Supply")
+                        {
+                            Game1.activeClickableMenu = new JojaSupplyMenu(_services, Helper);
+                        }
+                        else
+                        {
+                            _shopSkipped = true;
+                            Game1.drawObjectDialogue("好的，请稍等");
+                        }
+                    }
+                );
+                return;
+            }
+
+            // Reset interception flags when shop opens normally
+            _shopIntercepted = false;
+            _shopSkipped = false;
+
+            // Stage 11: inject seasonal crops (days 1-3, Joja/Pierre)
+            if (day >= 1 && day <= 3 && (shopId == "SeedShop" || shopId.Contains("Joja")))
+                InjectSeasonalCrops(shopMenu, shopId);
+
+            // Stage 7.3: snapshot inventory for sale detection
             _preShopInventory = Game1.player.Items
                 .Where(item => item is StardewValley.Object)
                 .GroupBy(item => item.QualifiedItemId)
                 .ToDictionary(g => g.Key, g => g.Sum(item => item.Stack));
 
             // 判断是否为 Joja 商店（通过 ShopId 或当前所在位置）
-            string shopId = shopMenu.ShopId ?? "";
+            shopId = shopMenu.ShopId ?? "";
             _shopIsJoja = shopId.Contains("Joja", StringComparison.OrdinalIgnoreCase)
                 || Game1.currentLocation?.Name == "JojaMart";
             return;
@@ -741,25 +956,68 @@ internal sealed class BankMod : Mod
                     string? cropCode = ShipmentTrackingService.NormalizeItemId(kvp.Key);
                     if (cropCode != null)
                     {
-                        int penalty = _services.FuelService.RecordExternalSale(account, cropCode, sold);
-                        changed = true;
-                        Monitor.Log($"[Stage7] External sale at {(_shopIsJoja ? "Joja" : "Pierre")}: {cropCode} x{sold} -> {penalty} FP penalty", LogLevel.Debug);
-
-                        if (penalty > 0)
+                        // Route check: CC → Joja blocked; Joja → Pierre blocked
+                        bool blocked = (_shopIsJoja && _services.PierreBoosted) || (!_shopIsJoja && _services.JojaBoosted);
+                        Monitor.Log($"[Stage7] Sale: shopIsJoja={_shopIsJoja}, PierreBoosted={_services.PierreBoosted}, JojaBoosted={_services.JojaBoosted}, blocked={blocked}", LogLevel.Info);
+                        if (blocked)
                         {
-                            var company = account.DynamicCompanies.FirstOrDefault(c => c.CropCode == cropCode);
-                            string competitor = company?.CompanyName ?? cropCode;
-                            string cropDisplay = CropDataProvider.GetByCode(cropCode)?.DisplayName ?? cropCode;
-
-                            // 检测银行欢迎信是否已发送（以银行欢迎信为标志）
-                            bool hasBankLetter = _hasReceivedPhoneInSession ||
-                                (Game1.player?.mailReceived?.Contains("BankMod_Letter") == true);
-
-                            // 根据商店类型触发对应信件：Joja 卖 → Morris 信，皮埃尔卖 → Pierre 信
-                            string letterType = _shopIsJoja ? "morris" : "pierre";
-                            if (_services.TriggerThanksLetter(account, letterType, cropCode, cropDisplay, competitor, hasBankLetter))
-                                UpdateMailCache(account);
+                            Monitor.Log($"[Stage7] Sale BLOCKED — route effect suppresses this shop", LogLevel.Info);
                         }
+                        else
+                        {
+                            int penalty = _services.FuelService.RecordExternalSale(account, cropCode, sold);
+                            changed = true;
+                            Monitor.Log($"[Stage7] External sale at {(_shopIsJoja ? "Joja" : "Pierre")}: {cropCode} x{sold} -> {penalty} FP penalty", LogLevel.Debug);
+
+                            if (penalty > 0)
+                            {
+                                var company = account.DynamicCompanies.FirstOrDefault(c => c.CropCode == cropCode);
+                                string competitor = company?.CompanyName ?? cropCode;
+                                string cropDisplay = CropDataProvider.GetByCode(cropCode)?.DisplayName ?? cropCode;
+
+                                bool hasBankLetter = _hasReceivedPhoneInSession ||
+                                    (Game1.player?.mailReceived?.Contains(MailFlags.BankMod_Letter) == true);
+
+                                string letterType = _shopIsJoja ? "morris" : "pierre";
+                                if (_services.TriggerThanksLetter(account, letterType, cropCode, cropDisplay, competitor, hasBankLetter))
+                                    UpdateMailCache(account);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Stage 11: detect seasonal crop purchases and apply fuel penalty
+            int shopDay = Game1.dayOfMonth;
+            if (shopDay >= 1 && shopDay <= 3 && (_shopIsJoja || _preShopInventory != null))
+            {
+                string shopKey = _shopIsJoja ? "Joja" : "Pierre";
+                foreach (var item in Game1.player.Items)
+                {
+                    if (item is not StardewValley.Object obj) continue;
+                    int preCount = 0;
+                    if (_preShopInventory.TryGetValue(obj.QualifiedItemId, out var cnt))
+                        preCount = cnt;
+                    int bought = obj.Stack - preCount;
+                    if (bought <= 0) continue;
+
+                    string? cropCode = ShipmentTrackingService.NormalizeItemId(obj.QualifiedItemId);
+                    if (cropCode is null) continue;
+
+                    // Track daily purchase
+                    if (!SeasonShopSold.ContainsKey(shopKey))
+                        SeasonShopSold[shopKey] = new Dictionary<string, int>();
+                    if (!SeasonShopSold[shopKey].ContainsKey(cropCode))
+                        SeasonShopSold[shopKey][cropCode] = 0;
+                    SeasonShopSold[shopKey][cropCode] += bought;
+
+                    // Apply fuel penalty
+                    var company = account.DynamicCompanies.FirstOrDefault(c => c.CropCode == cropCode);
+                    if (company is not null)
+                    {
+                        company.FuelStock -= bought * 5;
+                        if (company.FuelStock < 0) company.FuelStock = 0;
+                        changed = true;
                     }
                 }
             }
@@ -771,9 +1029,6 @@ internal sealed class BankMod : Mod
             return;
         }
 
-        if (!Context.IsWorldReady || Game1.player is null)
-            return;
-
         // 调试：记录所有菜单变化
         Monitor.Log($"[MailDebug] MenuChanged: NewMenu={e.NewMenu?.GetType().Name ?? "null"}", LogLevel.Info);
 
@@ -784,12 +1039,12 @@ internal sealed class BankMod : Mod
             // 当 BankMod 感谢信打开时，Data/mail 缓存可能还是占位符
             // 直接从存档读取真实内容，通过反射替换 LetterViewerMenu 内部的信件文本
             string title = lvm.mailTitle ?? "";
-            if (title is "BankMod.PierreThanks" or "BankMod.MorrisThanks")
+            if (title is MailFlags.BankMod_PierreThanks or MailFlags.BankMod_MorrisThanks)
             {
                 try
                 {
                     var acc = _services.BankAccountService.Load();
-                    string? realText = title == "BankMod.PierreThanks"
+                    string? realText = title == MailFlags.BankMod_PierreThanks
                         ? acc.PierreThanksLetterText
                         : acc.MorrisThanksLetterText;
 
@@ -828,25 +1083,53 @@ internal sealed class BankMod : Mod
         }
     }
 
+    private bool _phoneSeenInInventory;
+    private bool _phonePutInChest;
+
+    // Stage 14: Route & cutscene
+    private bool _lastEventActive;
+    private bool _oldSavePending;
+
+    private void OnWarped(object? sender, WarpedEventArgs e)
+    {
+        if (!Context.IsWorldReady || _services.RouteService.SeenCutscene) return;
+        if (e.NewLocation.Name != "AbandonedJojaMart") return;
+        if (!Game1.player.hasCompletedCommunityCenter()) return;
+
+        _services.RouteService.DetectRoute();
+        _services.RouteService.ApplyRouteEffects();
+
+        bool hasMovieTheater = Game1.player.hasOrWillReceiveMail(MailFlags.CC_MovieTheater) || Game1.player.mailReceived.Contains(MailFlags.CC_MovieTheater);
+        if (hasMovieTheater)
+        {
+            _services.RouteService.MarkCutsceneSeen();
+            _services.RouteService.UnlockOnlineShopping();
+            return;
+        }
+
+        _services.RouteService.MarkCutsceneSeen();
+        _services.EventScriptService.StartRouteEvent("献祭.txt", false);
+    }
+
     private void OnInventoryChanged(object? sender, InventoryChangedEventArgs e)
     {
-        if (!Context.IsWorldReady || Game1.player is null)
-            return;
+        if (!Context.IsWorldReady || Game1.player is null) return;
 
-        // Skip phone check when inventory/menu is open — moving items around isn't discarding
-        if (Game1.activeClickableMenu is not null)
-            return;
-
-        string? flagValue = Helper.Data.ReadSaveData<string>(PhoneReceivedFlag);
-        if (flagValue != "1") return;
-
-        if (!PlayerHasPhone())
+        // Track: phone entered player inventory (from ground, mail, or cursor)
+        if (e.Added.Any(item => item.QualifiedItemId == PhoneItem.QualifiedItemId))
         {
-            Helper.Data.WriteSaveData(PhoneReceivedFlag, "0");
-            _phoneReceivedToday = false;
-            _lastReadMail = null; // 重置以便下次来信时能重新检测
-            Monitor.Log("Phone was lost/discarded, status reset to 0", LogLevel.Info);
+            _phoneSeenInInventory = true;
+            Monitor.Log("[Phone] Phone entered inventory — _phoneSeenInInventory = true", LogLevel.Debug);
         }
+
+        // Track: phone moved from inventory into a chest
+        if (e.Removed.Any(item => item.QualifiedItemId == PhoneItem.QualifiedItemId)
+            && Game1.activeClickableMenu is StardewValley.Menus.ItemGrabMenu)
+        {
+            _phonePutInChest = true;
+            Monitor.Log("[Phone] Phone moved to chest — _phonePutInChest = true", LogLevel.Debug);
+        }
+
     }
 
     private void OnRenderedWorld(object? sender, RenderedWorldEventArgs e)
@@ -873,35 +1156,79 @@ internal sealed class BankMod : Mod
             0f, Vector2.Zero, 2f, Microsoft.Xna.Framework.Graphics.SpriteEffects.None, 1f);
     }
 
-    private void OnRenderedHud(object? sender, RenderedHudEventArgs e)
+    // Stage 11: daily seasonal purchase tracker
+    private static readonly Dictionary<string, Dictionary<string, int>> SeasonShopSold = new();
+    private static string _seasonShopDayKey = "";
+
+    private static void ResetSeasonShopDaily()
     {
-        if (!Context.IsWorldReady || Game1.player is null)
-            return;
-
-        var account = _services.BankAccountService.Load();
-
-        if (account.IsInBankruptcy)
+        string today = $"{Game1.year}_{Game1.currentSeason}_{Game1.dayOfMonth}";
+        if (_seasonShopDayKey != today)
         {
-            _wasBankruptThisSession = true;
-            _bankruptExitMessageShown = false;
-            const string banner = "星露谷永远有下一个春天，但现实需要你亲手耕耘每一个明天。";
-            Vector2 size = Game1.dialogueFont.MeasureString(banner);
-            float x = Game1.uiViewport.Width - size.X - 20;
-            float y = Game1.uiViewport.Height - size.Y - 12;
-
-            // Dark background bar
-            var bgRect = new Rectangle((int)x - 12, (int)y - 6, (int)size.X + 24, (int)size.Y + 12);
-            Game1.spriteBatch.Draw(Game1.staminaRect, bgRect, Color.Black * 0.7f);
-
-            Utility.drawTextWithShadow(Game1.spriteBatch, banner, Game1.dialogueFont,
-                new Vector2(x, y), Color.Gold);
+            SeasonShopSold.Clear();
+            _seasonShopDayKey = today;
         }
-        else if (_wasBankruptThisSession && !_bankruptExitMessageShown)
+    }
+
+    /// <summary>Stage 11: Inject seasonal crops as limited-stock items into Joja/Pierre shops.</summary>
+    private void InjectSeasonalCrops(StardewValley.Menus.ShopMenu shop, string shopId)
+    {
+        ResetSeasonShopDaily();
+        string shopKey = shopId.Contains("Joja") ? "Joja" : "Pierre";
+
+        // Route effects
+        if ((shopKey == "Pierre" && _services.JojaBoosted) || (shopKey == "Joja" && _services.PierreBoosted)) return;
+        int dailyLimit = (shopKey == "Pierre" && _services.PierreBoosted) || (shopKey == "Joja" && _services.JojaBoosted) ? 20 : 10;
+
+        var bundleCrops = new HashSet<string> { "Parsnip", "Green Bean", "Cauliflower", "Potato", "Blueberry", "Melon", "Hot Pepper", "Tomato", "Corn", "Eggplant", "Pumpkin", "Yam", "Wheat", "Poppy", "Sunflower" };
+        bool bundleUnlocked = Game1.player.hasOrWillReceiveMail(MailFlags.CC_Pantry) || Game1.player.hasOrWillReceiveMail(MailFlags.JojaMember);
+        bool islandUnlocked = Game1.player.hasOrWillReceiveMail(MailFlags.WillyBoatFixed);
+
+        string seasonKey = Game1.currentSeason switch { "spring" => "Spring", "summer" => "Summer", "fall" => "Fall", "winter" => "Winter", _ => Game1.currentSeason };
+        int added = 0;
+
+        foreach (var cd in CropDataProvider.AllCrops)
         {
-            _bankruptExitMessageShown = true;
-            _wasBankruptThisSession = false;
-            Game1.chatBox?.addInfoMessage("恭喜，享受你的春天吧！");
+            if (cd.R <= 0) continue;
+            if (!cd.IsPurchasable) continue;
+            if (!cd.Season.Contains(seasonKey, StringComparison.OrdinalIgnoreCase)) continue;
+            if (bundleCrops.Contains(cd.CropCode) && !bundleUnlocked) continue;
+            if (cd.CropCode == "Starfruit" && !Game1.player.hasOrWillReceiveMail(MailFlags.CC_Vault)) continue;
+            if ((cd.CropCode == "Banana" || cd.CropCode == "Mango" || cd.CropCode == "Pineapple" || cd.CropCode == "Taro") && !islandUnlocked) continue;
+
+            int objId = cd.CropCode switch
+            {
+                "Carrot" => 78, "Strawberry" => 400, "Parsnip" => 24, "Green Bean" => 188, "Potato" => 192,
+                "Garlic" => 248, "Unmilled Rice" => 271, "Cauliflower" => 190, "Kale" => 250,
+                "Blue Jazz" => 597, "Rhubarb" => 252, "Tulip" => 591,
+                "Blueberry" => 258, "Hops" => 304, "Hot Pepper" => 260, "Tomato" => 256, "Radish" => 264,
+                "Red Cabbage" => 266, "Melon" => 254, "Summer Spangle" => 593, "Starfruit" => 268,
+                "Beet" => 284, "Eggplant" => 272, "Artichoke" => 274, "Grape" => 398,
+                "Pumpkin" => 276, "Yam" => 280, "Amaranth" => 300, "Bok Choy" => 278,
+                "Cranberries" => 282, "Fairy Rose" => 595, "Powdermelon" => 0,
+                "Wheat" => 262, "Ancient Fruit" => 454, "Corn" => 270, "Sunflower" => 421,
+                "Summer Squash" => 0, "Broccoli" => 0, "Poppy" => 376,
+                _ => 0
+            };
+            if (objId <= 0) continue;
+
+            var item = ItemRegistry.Create($"(O){objId}");
+            int basePrice = (item as StardewValley.Object)?.sellToStorePrice() ?? 0;
+            if (basePrice <= 0) continue;
+
+            int alreadySold = 0;
+            if (SeasonShopSold.TryGetValue(shopKey, out var sd) && sd.TryGetValue(cd.CropCode, out var s))
+                alreadySold = s;
+            int remaining = dailyLimit - alreadySold;
+            if (remaining <= 0) continue;
+
+            int price = basePrice * 2;
+            shop.itemPriceAndStock.Add(item, new StardewValley.ItemStockInformation(price, remaining));
+            shop.forSale.Add(item);
+            added++;
         }
+
+        Monitor.Log($"[SeasonShop] Added {added} seasonal items to {shopKey} shop", LogLevel.Debug);
     }
 
     private void OnButtonPressed(object? sender, ButtonPressedEventArgs e)
@@ -991,7 +1318,7 @@ internal sealed class BankMod : Mod
         {
             _waitingForMorrisEventEnd = false;
             _morrisEventSeen = true;
-            Helper.Data.WriteSaveData("bankmod_morris_event_seen", "1");
+            Helper.Data.WriteSaveData(MailFlags.Save_MorrisEventSeen, "1");
 
             // Restore map Morris visibility
             if (_morrisOriginalPos.HasValue)
@@ -1021,9 +1348,9 @@ internal sealed class BankMod : Mod
             string? phoneFlag = Helper.Data.ReadSaveData<string>(PhoneReceivedFlag);
             if (phoneFlag != "1")
             {
-                if (!Game1.player.mailbox.Contains("BankMod_Letter"))
+                if (!Game1.player.mailbox.Contains(MailFlags.BankMod_Letter))
                 {
-                    Game1.player.mailbox.Add("BankMod_Letter");
+                    Game1.player.mailbox.Add(MailFlags.BankMod_Letter);
                     _lastReadMail = null; // 新信件入队，重置读取检测状态
                     Monitor.Log("Bank letter sent to mailbox", LogLevel.Info);
                 }
@@ -1037,9 +1364,9 @@ internal sealed class BankMod : Mod
         {
             _pendingPierreMail = false;
             _services.PendingPierreMail = false;
-            if (!Game1.player.mailbox.Contains("BankMod.PierreThanks"))
+            if (!Game1.player.mailbox.Contains(MailFlags.BankMod_PierreThanks))
             {
-                Game1.player.mailbox.Add("BankMod.PierreThanks");
+                Game1.player.mailbox.Add(MailFlags.BankMod_PierreThanks);
                 Monitor.Log("[MailDebug] Pierre mail added to mailbox", LogLevel.Info);
             }
         }
@@ -1047,26 +1374,72 @@ internal sealed class BankMod : Mod
         {
             _pendingMorrisMail = false;
             _services.PendingMorrisMail = false;
-            if (!Game1.player.mailbox.Contains("BankMod.MorrisThanks"))
+            if (!Game1.player.mailbox.Contains(MailFlags.BankMod_MorrisThanks))
             {
-                Game1.player.mailbox.Add("BankMod.MorrisThanks");
+                Game1.player.mailbox.Add(MailFlags.BankMod_MorrisThanks);
                 Monitor.Log("[MailDebug] Morris mail added to mailbox", LogLevel.Info);
             }
         }
 
-        if (_lastReadMail != "BankMod_Letter" && !Game1.player.mailbox.Contains("BankMod_Letter"))
+        if (_lastReadMail != MailFlags.BankMod_Letter && !Game1.player.mailbox.Contains(MailFlags.BankMod_Letter))
         {
             string? phoneFlag = Helper.Data.ReadSaveData<string>(PhoneReceivedFlag);
             if (phoneFlag != "1" && !_phoneReceivedToday)
             {
                 Monitor.Log("Bank letter read - directly giving phone to player", LogLevel.Info);
                 GivePhoneToPlayer();
-                _lastReadMail = "BankMod_Letter";
+                _lastReadMail = MailFlags.BankMod_Letter;
             }
         }
 
-        // Stage 8 bankruptcy: garnish non-withdrawal money gains
+        // Stage 14: Event transition detection
+        bool eventActive = Game1.CurrentEvent is not null;
+
+        // Event-based route detection (Joja 502261 / CC 191393)
+        if (eventActive && !_lastEventActive)
+        {
+            _services.RouteService.DetectRouteFromEvent(Game1.CurrentEvent.id);
+            if (!string.IsNullOrEmpty(_services.RouteService.CompletedRoute))
+                _services.RouteService.ApplyRouteEffects();
+        }
+        _lastEventActive = eventActive;
+
+        // Show dialog after trigger (event-end / old save — Joja only; CC via OnWarped)
+        if (!eventActive && !_services.RouteService.SeenCutscene && Game1.activeClickableMenu is null
+            && (_oldSavePending || _services.RouteService.CompletedRoute == "Joja"))
+        {
+            _oldSavePending = false;
+            _services.RouteService.MarkCutsceneSeen();
+            _services.RouteService.SaveToSave(Helper);
+            string file = _services.RouteService.CompletedRoute == "Joja" ? "joja.txt" : "献祭.txt";
+            _services.EventScriptService.StartRouteEvent(file, _services.RouteService.CompletedRoute == "Joja");
+        }
+
+        // Mod event ended → unlock online shopping
+        if (_services.RouteService.ModEventPlaying && !eventActive)
+        {
+            _services.RouteService.ModEventPlaying = false;
+            _services.RouteService.UnlockOnlineShopping();
+            _services.RouteService.SaveToSave(Helper);
+        }
+
+        // Stage 8 bankruptcy: garnish non-withdrawal money gains + banner
         var account = _services.BankAccountService.Load();
+        if (account.IsInBankruptcy)
+        {
+            BankruptBanner.Show();
+            if (!_bankruptExitMessageShown) _bankruptExitMessageShown = true; // reset exit message flag
+        }
+        else
+        {
+            BankruptBanner.Hide();
+            if (_bankruptExitMessageShown)
+            {
+                _bankruptExitMessageShown = false;
+                Game1.chatBox?.addInfoMessage("恭喜，享受你的春天吧！");
+            }
+        }
+
         if (account.IsInBankruptcy && Game1.player.Money > _lastMoneySnapshot)
         {
             int increase = Game1.player.Money - _lastMoneySnapshot;
@@ -1099,14 +1472,266 @@ internal sealed class BankMod : Mod
     *********/
     private void OnPeerConnected(object? sender, PeerConnectedEventArgs e)
     {
-        Monitor.Log($"[联机] 客户端已连接: {e.Peer.PlayerID} (主机={Context.IsMainPlayer})", LogLevel.Info);
-        // TODO 阶段十三：主机序列化 ModConfig → SendMessage(MsgConfigSync)
+        Monitor.Log($"[MP] PeerConnected: ID={e.Peer.PlayerID} IsHost={e.Peer.IsHost} IsMainPlayer={Context.IsMainPlayer}", LogLevel.Info);
+        if (Context.IsMainPlayer)
+        {
+            var syncMsg = new Messages.ConfigSyncMessage
+            {
+                JojaDepositRate = _config.Companies[0].DepositInterestRate,
+                JojaLoanRate = _config.Companies[0].LoanInterestRate,
+                PierreDepositRate = _config.Companies[1].DepositInterestRate,
+                PierreLoanRate = _config.Companies[1].LoanInterestRate,
+                EnableLuckInfluence = _config.EnableLuckInfluence,
+                EnableWeatherInfluence = _config.EnableWeatherInfluence,
+                UseCompoundInterest = _config.UseCompoundInterest,
+                CompanySpawnRequiredSellCount = _config.CompanySpawnRequiredSellCount,
+                BankruptcyIncomeDeduction = _config.BankruptcyIncomeDeduction
+            };
+            Helper.Multiplayer.SendMessage(syncMsg, MsgConfigSync, null, new[] { e.Peer.PlayerID });
+            Monitor.Log($"[MP] ConfigSync sent to {e.Peer.PlayerID}: JojaDep={syncMsg.JojaDepositRate} PierreDep={syncMsg.PierreDepositRate}", LogLevel.Info);
+        }
+        else if (!_configSyncReceived)
+        {
+            // Guest: start 5-second timer to detect if host has the mod
+            _standaloneCheckTicks = 5; // 5 seconds
+            Monitor.Log("[MP] Guest waiting 5s for ConfigSync...", LogLevel.Info);
+        }
     }
 
     private void OnModMessageReceived(object? sender, ModMessageReceivedEventArgs e)
     {
-        Monitor.Log($"[联机] 收到消息类型: {e.Type} 来自: {e.FromPlayerID}", LogLevel.Debug);
-        // TODO 阶段十三：根据 e.Type 分发处理 ConfigSync / BankOperation / BankDataSync / BankSnapshot
+        Monitor.Log($"[MP] MessageReceived: Type={e.Type} From={e.FromPlayerID}", LogLevel.Debug);
+
+        switch (e.Type)
+        {
+            case MsgConfigSync:
+                if (!Context.IsMainPlayer && e.ReadAs<Messages.ConfigSyncMessage>() is { } cfg)
+                {
+                    _configSyncReceived = true;
+                    _config.Companies[0].DepositInterestRate = cfg.JojaDepositRate;
+                    _config.Companies[0].LoanInterestRate = cfg.JojaLoanRate;
+                    _config.Companies[1].DepositInterestRate = cfg.PierreDepositRate;
+                    _config.Companies[1].LoanInterestRate = cfg.PierreLoanRate;
+                    _config.EnableLuckInfluence = cfg.EnableLuckInfluence;
+                    _config.EnableWeatherInfluence = cfg.EnableWeatherInfluence;
+                    _config.UseCompoundInterest = cfg.UseCompoundInterest;
+                    _config.CompanySpawnRequiredSellCount = cfg.CompanySpawnRequiredSellCount;
+                    _config.BankruptcyIncomeDeduction = cfg.BankruptcyIncomeDeduction;
+                    Monitor.Log($"[MP] ConfigSync applied: JojaDep={cfg.JojaDepositRate} PierreDep={cfg.PierreDepositRate} Luck={cfg.EnableLuckInfluence} Weather={cfg.EnableWeatherInfluence}", LogLevel.Info);
+
+                    // If we were in standalone mode, migrate our data to the host
+                    if (_standaloneMode)
+                    {
+                        Monitor.Log("[MP] Migrating from standalone to networked mode — sending account data to host", LogLevel.Warn);
+                        var migAccount = _services.BankAccountService.Load();
+                        Helper.Multiplayer.SendMessage(migAccount, MsgAccountMigration, null, null);
+                        _standaloneMode = false;
+                        _services.StandaloneMode = false;
+                        Game1.chatBox?.addInfoMessage("[BankMod] 检测到房主已安装Mod，已将本地数据同步至主机。");
+                    }
+                }
+                else
+                {
+                    Monitor.Log($"[MP] ConfigSync ignored (IsMain={Context.IsMainPlayer})", LogLevel.Debug);
+                }
+                break;
+
+            case MsgBankOperation:
+                if (Context.IsMainPlayer && e.ReadAs<Messages.BankOperationRequest>() is { } req)
+                {
+                    Monitor.Log($"[MP] BankOperation received: Op={req.Operation} Co={req.CompanyName} Amt={req.Amount} Sender={req.SenderId} Target={req.TargetPlayer ?? "N/A"}", LogLevel.Info);
+                    ProcessRemoteOperation(req);
+                }
+                else
+                {
+                    Monitor.Log($"[MP] BankOperation ignored (IsMain={Context.IsMainPlayer}, ReadOk={e.ReadAs<Messages.BankOperationRequest>() is not null})", LogLevel.Debug);
+                }
+                break;
+
+            case MsgBankDataSync:
+                if (!Context.IsMainPlayer && e.ReadAs<Messages.BankDataSync>() is { } sync)
+                {
+                    var account = _services.BankAccountService.Load();
+                    var ca = account.CompanyAccounts.FirstOrDefault(a => a.CompanyName == sync.CompanyName);
+                    if (ca is not null)
+                    {
+                        int oldBal = ca.DepositBalance;
+                        ca.DepositBalance = sync.NewDepositBalance;
+                        ca.BaseAmount = sync.NewDepositBalance;
+                        Monitor.Log($"[MP] BankDataSync applied: {sync.CompanyName} {oldBal}->{sync.NewDepositBalance} Loan={sync.NewLoanPrincipal}", LogLevel.Info);
+                    }
+                    else
+                    {
+                        Monitor.Log($"[MP] BankDataSync: company {sync.CompanyName} not found in account", LogLevel.Warn);
+                    }
+                    _services.BankAccountService.Save(account);
+                }
+                else
+                {
+                    Monitor.Log($"[MP] BankDataSync ignored (IsMain={Context.IsMainPlayer})", LogLevel.Debug);
+                }
+                break;
+
+            case MsgAccountMigration:
+                if (Context.IsMainPlayer && e.ReadAs<Data.BankAccountData>() is { } guestData)
+                {
+                    var hostAccount = _services.BankAccountService.Load();
+                    Monitor.Log($"[MP] AccountMigration: merging guest data (guest={guestData.CompanyAccounts.Count}accts/{guestData.Loans.Count}loans host={hostAccount.CompanyAccounts.Count}accts/{hostAccount.Loans.Count}loans)", LogLevel.Warn);
+
+                    // Additive merge: deposit/loan principal/FP accumulate; status recalculated from merged FP later
+                    foreach (var gca in guestData.CompanyAccounts)
+                    {
+                        var hca = hostAccount.CompanyAccounts.FirstOrDefault(a => a.CompanyName == gca.CompanyName);
+                        if (hca is not null)
+                        {
+                            hca.DepositBalance += gca.DepositBalance;
+                            hca.BaseAmount += gca.BaseAmount;
+                            hca.AccumulatedInterest += gca.AccumulatedInterest;
+                            Monitor.Log($"[MP]   Merged {gca.CompanyName}: +{gca.DepositBalance} deposit +{gca.AccumulatedInterest} interest", LogLevel.Debug);
+                        }
+                        else
+                        {
+                            hostAccount.CompanyAccounts.Add(gca);
+                        }
+                    }
+                    foreach (var gl in guestData.Loans)
+                    {
+                        var hl = hostAccount.Loans.FirstOrDefault(l => l.CompanyName == gl.CompanyName && l.DueDay == gl.DueDay);
+                        if (hl is not null)
+                        {
+                            hl.Principal += gl.Principal;
+                            hl.AccumulatedInterest += gl.AccumulatedInterest;
+                            hl.OverdueInterest += gl.OverdueInterest;
+                            Monitor.Log($"[MP]   Merged loan {gl.CompanyName}: +{gl.Principal} principal", LogLevel.Debug);
+                        }
+                        else
+                        {
+                            hostAccount.Loans.Add(gl);
+                        }
+                    }
+                    foreach (var gdc in guestData.DynamicCompanies)
+                    {
+                        var hdc = hostAccount.DynamicCompanies.FirstOrDefault(c => c.CompanyName == gdc.CompanyName);
+                        if (hdc is not null)
+                        {
+                            hdc.FuelStock += gdc.FuelStock;
+                            Monitor.Log($"[MP]   Merged {gdc.CompanyName} fuel: +{gdc.FuelStock} FP", LogLevel.Debug);
+                        }
+                        else
+                        {
+                            hostAccount.DynamicCompanies.Add(gdc);
+                        }
+                    }
+                    if (!hostAccount.IsInBankruptcy && guestData.IsInBankruptcy)
+                        hostAccount.IsInBankruptcy = true;
+
+                    _services.BankAccountService.Save(hostAccount);
+                    Game1.chatBox?.addInfoMessage("[BankMod] 已接收客机独立运行期间的数据并合并。");
+                    Monitor.Log($"[MP] AccountMigration complete: {hostAccount.CompanyAccounts.Count}accts/{hostAccount.Loans.Count}loans", LogLevel.Info);
+                }
+                break;
+
+            case MsgBankSnapshot:
+                if (!Context.IsMainPlayer && e.ReadAs<Messages.BankSnapshot>() is { } snap)
+                {
+                    var account = _services.BankAccountService.Load();
+                    account.IsInBankruptcy = snap.IsInBankruptcy;
+                    Monitor.Log($"[MP] Snapshot received: {snap.Companies.Count} companies, Bankrupt={snap.IsInBankruptcy}, HostMoney={snap.PlayerMoney}", LogLevel.Info);
+                    foreach (var cs in snap.Companies)
+                    {
+                        var ca = account.CompanyAccounts.FirstOrDefault(a => a.CompanyName == cs.Name);
+                        if (ca is not null)
+                        {
+                            int oldBal = ca.DepositBalance;
+                            ca.DepositBalance = cs.DepositBalance;
+                            ca.BaseAmount = cs.DepositBalance;
+                            Monitor.Log($"[MP]   Snapshot {cs.Name}: Bal {oldBal}->{cs.DepositBalance} Loan={cs.LoanPrincipal} Status={cs.Status}", LogLevel.Debug);
+                        }
+                    }
+                    _services.BankAccountService.Save(account);
+                }
+                else
+                {
+                    Monitor.Log($"[MP] Snapshot ignored (IsMain={Context.IsMainPlayer})", LogLevel.Debug);
+                }
+                break;
+        }
+    }
+
+    private readonly Dictionary<long, bool> _operationLocks = new();
+
+    private void ProcessRemoteOperation(Messages.BankOperationRequest req)
+    {
+        if (_operationLocks.ContainsKey(req.SenderId))
+        {
+            Monitor.Log($"[联机] 操作被锁: {req.SenderId}", LogLevel.Warn);
+            return;
+        }
+        _operationLocks[req.SenderId] = true;
+
+        try
+        {
+            var account = _services.BankAccountService.Load();
+            var company = _config.Companies.FirstOrDefault(c => c.Name == req.CompanyName);
+            if (company is null) company = _services.CompanyManager.GetAllCompanyDefinitions(account)
+                .FirstOrDefault(c => c.Name == req.CompanyName);
+            if (company is null) return;
+
+            var ca = account.CompanyAccounts.FirstOrDefault(a => a.CompanyName == req.CompanyName);
+
+            switch (req.Operation)
+            {
+                case "Deposit":
+                    if (ca is not null && Game1.player.Money >= req.Amount)
+                    {
+                        Game1.player.Money -= req.Amount;
+                        ca.DepositBalance += req.Amount;
+                        ca.BaseAmount += req.Amount;
+                    }
+                    break;
+                case "Withdraw":
+                    if (ca is not null && ca.DepositBalance >= req.Amount)
+                    {
+                        ca.DepositBalance -= req.Amount;
+                        ca.BaseAmount = Math.Max(0, ca.BaseAmount - req.Amount);
+                        Game1.player.Money += req.Amount;
+                    }
+                    break;
+                case "Borrow7":
+                case "Borrow14":
+                    int days = req.Operation == "Borrow7" ? 7 : 14;
+                    _services.LoanService.IssueLoan(company, req.Amount, days, account, _config, _services.FixedInterestCalculator);
+                    break;
+                case "Repay":
+                    var loan = _services.LoanService.GetLoan(account, req.CompanyName);
+                    if (loan is not null) _services.LoanService.RepayLoan(loan, req.Amount, account);
+                    break;
+                case "Transfer":
+                    var target = Game1.getAllFarmers().FirstOrDefault(f => f.Name == req.TargetPlayer);
+                    if (target is not null && Game1.player.Money >= req.Amount)
+                    {
+                        Game1.player.Money -= req.Amount;
+                        target.Money += req.Amount;
+                    }
+                    break;
+            }
+
+            _services.BankAccountService.Save(account);
+
+            // Broadcast updated state
+            var sync = new Messages.BankDataSync
+            {
+                SenderId = req.SenderId,
+                CompanyName = req.CompanyName,
+                NewDepositBalance = ca?.DepositBalance ?? 0,
+                NewLoanPrincipal = account.Loans.Where(l => l.CompanyName == req.CompanyName).Sum(l => l.Principal)
+            };
+            Helper.Multiplayer.SendMessage(sync, MsgBankDataSync, null, null);
+        }
+        finally
+        {
+            _operationLocks.Remove(req.SenderId);
+        }
     }
 
     /*********
@@ -1157,8 +1782,8 @@ internal sealed class BankMod : Mod
             _services.HasReceivedPhoneInSession = true;
             Helper.Data.WriteSaveData(PhoneReceivedFlag, "1");
             // 标记银行欢迎信为已接收，确保后续 JojaSupplyMenu 等处的 mailReceived 检查通过
-            if (!Game1.player.mailReceived.Contains("BankMod_Letter"))
-                Game1.player.mailReceived.Add("BankMod_Letter");
+            if (!Game1.player.mailReceived.Contains(MailFlags.BankMod_Letter))
+                Game1.player.mailReceived.Add(MailFlags.BankMod_Letter);
             Game1.chatBox?.addInfoMessage(I18n.Chat_PhoneReceived());
             Monitor.Log("Phone given to player, status set to 1", LogLevel.Info);
         }
@@ -1236,12 +1861,12 @@ internal sealed class BankMod : Mod
             var mailData = Helper.GameContent.Load<Dictionary<string, string>>("Data/mail");
             if (!string.IsNullOrEmpty(account.PierreThanksLetterText))
             {
-                mailData["BankMod.PierreThanks"] = NormalizeMailText(account.PierreThanksLetterText);
+                mailData[MailFlags.BankMod_PierreThanks] = NormalizeMailText(account.PierreThanksLetterText);
                 Monitor.Log("[MailCache] Updated BankMod.PierreThanks in memory", LogLevel.Info);
             }
             if (!string.IsNullOrEmpty(account.MorrisThanksLetterText))
             {
-                mailData["BankMod.MorrisThanks"] = NormalizeMailText(account.MorrisThanksLetterText);
+                mailData[MailFlags.BankMod_MorrisThanks] = NormalizeMailText(account.MorrisThanksLetterText);
                 Monitor.Log("[MailCache] Updated BankMod.MorrisThanks in memory", LogLevel.Info);
             }
         }
@@ -1265,10 +1890,10 @@ internal sealed class BankMod : Mod
         try
         {
             var mailData = Helper.GameContent.Load<Dictionary<string, string>>("Data/mail");
-            Monitor.Log($"[MailDebug] Data/mail has BankMod_Letter={mailData.ContainsKey("BankMod_Letter")}, BankMod.PierreThanks={mailData.ContainsKey("BankMod.PierreThanks")}, BankMod.MorrisThanks={mailData.ContainsKey("BankMod.MorrisThanks")}", LogLevel.Info);
-            if (mailData.TryGetValue("BankMod.PierreThanks", out var pt))
+            Monitor.Log($"[MailDebug] Data/mail has BankMod_Letter={mailData.ContainsKey(MailFlags.BankMod_Letter)}, BankMod.PierreThanks={mailData.ContainsKey(MailFlags.BankMod_PierreThanks)}, BankMod.MorrisThanks={mailData.ContainsKey(MailFlags.BankMod_MorrisThanks)}", LogLevel.Info);
+            if (mailData.TryGetValue(MailFlags.BankMod_PierreThanks, out var pt))
                 Monitor.Log($"[MailDebug] BankMod.PierreThanks text len={pt?.Length ?? -1}", LogLevel.Info);
-            if (mailData.TryGetValue("BankMod.MorrisThanks", out var mt))
+            if (mailData.TryGetValue(MailFlags.BankMod_MorrisThanks, out var mt))
                 Monitor.Log($"[MailDebug] BankMod.MorrisThanks text len={mt?.Length ?? -1}", LogLevel.Info);
         }
         catch (Exception ex)
@@ -1298,7 +1923,7 @@ internal sealed class BankMod : Mod
         // 检测银行欢迎信是否已发送（以银行欢迎信为标志）
         // 控制台命令测试时：允许新存档直接测试，游戏内触发仍需检查
         bool hasBankLetter = _hasReceivedPhoneInSession || 
-            (Game1.player.mailReceived?.Contains("BankMod_Letter") == true);
+            (Game1.player.mailReceived?.Contains(MailFlags.BankMod_Letter) == true);
         
         // 控制台命令总是允许执行（方便测试），但会记录日志
         if (!hasBankLetter)

@@ -6,7 +6,7 @@
 [![SMAPI 4.0](https://img.shields.io/badge/SMAPI-4.0+-green)](https://smapi.io/)
 [![Stardew 1.6](https://img.shields.io/badge/SDV-1.6+-orange)](https://www.stardewvalley.net/)
 
-**V2.8.0** | by **yixingtianya** | Stage 1-10 完成
+**V2.8.0** | by **yixingtianya** | Stage 1-14 完成
 
 ![封面](assets/Picture.png)
 
@@ -26,6 +26,7 @@
    - [公司倒闭与债券转移](#公司倒闭与债券转移)
    - [入股救市](#入股救市)
    - [电视金融频道](#电视金融频道)
+   - [路线完成与网购](#路线完成与网购)
 4. [进阶玩法](#进阶玩法)
 5. [GMCM 配置](#gmcm-配置)
 6. [项目架构](#项目架构)
@@ -270,6 +271,49 @@ Joja 超市和皮埃尔杂货店，提供基础金融服务。利率稳定，适
 
 ---
 
+### 路线完成与网购
+
+玩家完成 Joja 仓库 或 CC 献祭路线后，触发专属过场动画并解锁手机网购。
+
+**路线检测**：
+
+| 路线 | 事件 ID | 过场地点 | 触发方式 |
+|------|---------|---------|---------|
+| Joja | 502261 | 黑屏文字 | 事件完成 → 自动 |
+| CC | 191393 | AbandonedJojaMart | 进入废弃超市 → 皮埃尔对话 |
+
+**路线效果**（存档独立，持久化）：
+
+| 效果 | CC 路线 | Joja 路线 |
+|------|--------|----------|
+| 公司改名 | Joja超市 → 皮埃尔子公司 | 皮埃尔 → Joja子公司 |
+| 打压上限 | 皮埃尔 ×2（6 层） | Joja ×2（6 层） |
+| 皮埃尔柜台 | 正常 + 季节作物 ×2 | 失去打压 + 季节作物 |
+| Joja 柜台 | 失去打压 + 季节作物 | 正常 + 季节作物 ×2 |
+
+**CC 过场动画**：皮埃尔在废弃 Joja 超市讲述电信计划书 → 祝尼魔出现（5 色 × 16px 精灵，逐个跳跃出场）→ 刘易斯来电话 → 网购解锁。
+
+**Joja 过场动画**：黑屏，莫里斯祝贺文字 → 介绍手机新功能 → 网购解锁。
+
+**网购系统**：手机银行 → 网购按钮 → 选择店铺（6 家）→ 营业时间检查 → 运费 → 打开商店。
+
+**营业时间**（来自 `time.txt` 权威数据）：
+
+| 商店 | 时间 | 休息日 | 锁 |
+|------|------|--------|-----|
+| 皮埃尔 | 9-21 | 周三 + 夏26 | - |
+| 铁匠铺 | 9-16 | 周四 | - |
+| 木匠铺 | 9-20 | 周二 | - |
+| Joja | 9-23 | 周六 | - |
+| 沙漠 | 9-23 | 周二 | 公交 (ccVault) |
+| 姜岛 | 全天 | - | 船只 (willyBoatFixed) |
+
+CC 路线排除 Joja。非营业时间显示 `[关闭原因]`，点击提示"该商店未营业"。
+
+**破产标语**：右下角 "星露谷永远有下一个春天，但现实需要你亲手耕耘每一个明天。" — `IClickableMenu` overlay，由游戏 UI 系统管理，不再泄漏到截图。
+
+---
+
 ## 进阶玩法
 
 以下策略基于 Mod 各系统的真实数值关系，非设计意图，而是机制自然涌现的结果。
@@ -322,14 +366,14 @@ Joja 超市和皮埃尔杂货店，提供基础金融服务。利率稳定，适
 ```
 DynamicFinancialSystem/
 ├── BankMod.cs                    入口（组合根，SMAPI 事件适配）
-├── Domain/                       值对象（CompanyStatus, InterestCalculationContext）
+├── Domain/                       值对象（CompanyStatus, InterestCalculationContext, MailFlags）
 ├── Data/                         数据模型（ModConfig, BankAccountData, DynamicCompanyData, CropDataProvider）
 ├── Services/
-│   ├── Abstractions/             10 个接口
-│   └── Core/                     12 个实现（CompanyManager, LoanService, FuelService, BankruptcyHandler 等）
-├── UI/                           BankMenu, NumberInputMenu, RescueInvestMenu
+│   ├── Abstractions/             13 个接口（含 IRouteService, IEventScriptService, IStoreHoursService）
+│   └── Core/                     15 个实现（含 RouteService, EventScriptService, StoreHoursService）
+├── UI/                           BankMenu, BankruptBanner, JojaSupplyMenu, RescueInvestMenu
 ├── Patches/                      TVPatch, FbnNewsGenerator
-├── assets/                       phone.png, TV1/2/3.png
+├── assets/                       phone.png, TV1/2/3.png, znm*.png (12 祝尼魔精灵), joja.txt, 献祭.txt, time.txt
 └── manifest.json
 ```
 
@@ -348,6 +392,8 @@ DynamicFinancialSystem/
 | `TV.txt` | FBN 频道内容设计（场景 A-E + 40 作物微讯 + 季节过渡） |
 | `Crops values.txt` | 作物数据源（R/DBase/Smax/等效支出） |
 | `Stage10测试流程.txt` | 电视金融频道测试用例 |
+| `Stage14重构测试文档.txt` | Stage 14 路线完成与网购测试用例 |
+| `time.txt` | 商店营业时间权威数据源 |
 
 ---
 
