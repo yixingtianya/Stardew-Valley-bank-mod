@@ -31,4 +31,7 @@ public class DynamicCompanyData
 
     /// <summary>Amount already withdrawn from the asset pool.</summary>
     public int AssetPoolConsumed { get; set; }
+
+    /// <summary>Days remaining in season transition watch (3→0). 0 = not in transition.</summary>
+    public int SeasonTransitionDays { get; set; }
 }

@@ -121,6 +121,14 @@ public class ModConfig
     public double TransferFeeValue { get; set; } = 0.01;
 
     /*********
+    ** 网购与运费（阶段十四）
+    *********/
+    public bool EnableDeliveryFee { get; set; } = true;
+    public double DeliveryFeePercentage { get; set; } = 0.05;
+    public int DeliveryFeeFlat { get; set; } = 0;
+    public List<string> OnlineShopList { get; set; } = new() { "SeedShop", "Blacksmith", "Carpenter", "Joja", "IslandTrade", "DesertTrade" };
+
+    /*********
     ** 显示设置
     *********/
     public int RateDisplayPrecision { get; set; } = 2;
@@ -172,6 +180,10 @@ public class ModConfig
             FixedCompanyQuotaRatio = FixedCompanyQuotaRatio,
             TransferFeeMode = TransferFeeMode,
             TransferFeeValue = TransferFeeValue,
+            EnableDeliveryFee = EnableDeliveryFee,
+            DeliveryFeePercentage = DeliveryFeePercentage,
+            DeliveryFeeFlat = DeliveryFeeFlat,
+            OnlineShopList = new List<string>(OnlineShopList),
             RateDisplayPrecision = RateDisplayPrecision,
             ShowRateChangeNotification = ShowRateChangeNotification,
             ShowMorningInterestNotification = ShowMorningInterestNotification,
