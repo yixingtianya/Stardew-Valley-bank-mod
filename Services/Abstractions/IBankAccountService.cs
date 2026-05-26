@@ -7,5 +7,6 @@ public interface IBankAccountService
 {
     BankAccountData Load();
     void Save(BankAccountData data);
+    void InvalidateCache();
     CompanyAccount GetOrCreateAccount(BankAccountData data, string companyName);
 }

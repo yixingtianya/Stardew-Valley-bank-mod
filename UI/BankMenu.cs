@@ -36,6 +36,7 @@ internal class BankMenu : IClickableMenu
     private readonly ClickableTextureComponent _repayBtn;
     private readonly ClickableTextureComponent _rescueBtn;
     private readonly ClickableTextureComponent _onlineShopBtn;
+    private readonly ClickableTextureComponent _compoundBtn;
     private readonly ClickableTextureComponent _loanDetailBtn;
     private readonly List<ClickableTextureComponent> _loanRepayBtns = new();
     private bool _hoverDeposit;
@@ -45,6 +46,7 @@ internal class BankMenu : IClickableMenu
     private bool _hoverRepay;
     private bool _hoverRescue;
     private bool _hoverOnlineShop;
+    private bool _hoverCompound;
     private bool _hoverLoanDetail;
     private Rectangle _depositRateBounds;
     private Rectangle _loanRateBounds;
@@ -81,7 +83,7 @@ internal class BankMenu : IClickableMenu
         bool hasWarning = account.IsInBankruptcy || account.IsInPrincipalDebt || account.IsInInterestDebt;
 
         int tabStartX = xPositionOnScreen + 30;
-        int tabY = yPositionOnScreen + 62;
+        int tabY = yPositionOnScreen + 55;
         int tabHeight = 30;
         for (int i = 0; i < _companyList.Count; i++)
         {
@@ -134,6 +136,10 @@ internal class BankMenu : IClickableMenu
             new Rectangle(centerX - btnW * 2 - gap * 2, btnY2, btnW, btnH),
             Game1.mouseCursors, new Rectangle(128, 384, 64, 64), 1f
         );
+        _compoundBtn = new ClickableTextureComponent(
+            new Rectangle(centerX + btnW + gap, btnY2, btnW, btnH),
+            Game1.mouseCursors, new Rectangle(128, 384, 64, 64), 1f
+        );
     }
 
     private CompanyDefinition CurrentCompany => _companyList[_selectedCompanyIndex];
@@ -183,21 +189,7 @@ internal class BankMenu : IClickableMenu
         b.Draw(Game1.fadeToBlackRect, Game1.graphics.GraphicsDevice.Viewport.Bounds, Color.Black * 0.5f);
         Game1.drawDialogueBox(xPositionOnScreen, yPositionOnScreen, width, height, false, true);
 
-        // Title + author credit
-        string title = "Dynamic Financial System";
-        Vector2 titleSize = Game1.dialogueFont.MeasureString(title);
-        Utility.drawTextWithShadow(
-            b, title, Game1.dialogueFont,
-            new Vector2(xPositionOnScreen + (width - titleSize.X) / 2, yPositionOnScreen + 6),
-            Game1.textColor
-        );
-        string credit = "by yixingtianya";
-        Vector2 creditSize = Game1.smallFont.MeasureString(credit);
-        Utility.drawTextWithShadow(b, credit, Game1.smallFont,
-            new Vector2(xPositionOnScreen + (width - creditSize.X) / 2, yPositionOnScreen + 32),
-            Color.DimGray);
-
-        // Stage 8: Warning banner below title/credit, above divider
+        // Stage 8: Warning banner at the top (replaces title area when active)
         string warnText = "";
         if (_account.IsInBankruptcy)
             warnText = "破产保护 - 逾期贷款已冻结(0利息)，借款暂停，出货收入50%强制偿债";
@@ -206,23 +198,33 @@ internal class BankMenu : IClickableMenu
         else if (_account.IsInInterestDebt)
             warnText = "利息欠债 - 现金不足支付贷款日息，逾期利息持续累积";
 
-        int warnY = yPositionOnScreen + 54;
+        int titleY = warnText.Length > 0 ? yPositionOnScreen + 18 : yPositionOnScreen + 6;
+
         if (warnText.Length > 0)
         {
             Vector2 warnSize = Game1.smallFont.MeasureString(warnText);
             b.Draw(Game1.fadeToBlackRect,
-                new Rectangle(xPositionOnScreen + 12, warnY - 2, width - 24, (int)warnSize.Y + 6),
+                new Rectangle(xPositionOnScreen + 12, yPositionOnScreen + 4, width - 24, (int)warnSize.Y + 8),
                 Color.Maroon * 0.4f);
             b.DrawString(Game1.smallFont, warnText,
-                new Vector2(xPositionOnScreen + (width - warnSize.X) / 2, warnY),
+                new Vector2(xPositionOnScreen + (width - warnSize.X) / 2, yPositionOnScreen + 8),
                 Color.Red);
         }
-        else
-        {
-            // No warning — keep spacing consistent
-        }
 
-        b.Draw(Game1.staminaRect, new Rectangle(xPositionOnScreen + 30, yPositionOnScreen + 74, width - 60, 2), Color.Gray);
+        // Title + author credit on same line (pushed down if warning is active)
+        string title = "Dynamic Financial System  ";
+        string credit = "by yixingtianya";
+        Vector2 titleSize = Game1.dialogueFont.MeasureString(title);
+        Vector2 creditSize = Game1.smallFont.MeasureString(credit);
+        float combinedW = titleSize.X + creditSize.X;
+        float titleX = xPositionOnScreen + (width - combinedW) / 2;
+        Utility.drawTextWithShadow(b, title, Game1.dialogueFont,
+            new Vector2(titleX, titleY), Game1.textColor);
+        Utility.drawTextWithShadow(b, credit, Game1.smallFont,
+            new Vector2(titleX + titleSize.X, titleY + 6), Color.DimGray);
+
+        int dividerY = titleY + 32;
+        b.Draw(Game1.staminaRect, new Rectangle(xPositionOnScreen + 30, dividerY, width - 60, 2), Color.Gray);
 
         // Company tabs (max 4 visible, scrollable, dynamically repositioned)
         int maxVisibleTabs = 4;
@@ -278,7 +280,7 @@ internal class BankMenu : IClickableMenu
         var acct = GetOrCreateAccount();
         var loan = GetCurrentLoan();
         int infoX = xPositionOnScreen + 40;
-        int infoY = yPositionOnScreen + 105;
+        int infoY = dividerY + 48;
         int lineH = 26;
 
         string titleStr = $"=== {company.Name} ===";
@@ -565,9 +567,39 @@ internal class BankMenu : IClickableMenu
         DrawTextButton(b, _loanDetailBtn, _showLoanDetail ? "摘要" : "明细", _hoverLoanDetail, Color.DarkCyan);
 
         // Stage 14: online shopping button
-        if (_services.OnlineShoppingUnlocked)
+        // Online shopping: only on fixed companies, not dynamic
+        bool isDynamic = _account.DynamicCompanies.Any(c => c.CompanyName == CurrentCompany.Name);
+        if (_services.OnlineShoppingUnlocked && !isDynamic)
         {
             DrawTextButton(b, _onlineShopBtn, "网购", _hoverOnlineShop, Color.DarkCyan);
+        }
+
+        // Stage 15: compound interest button (dynamic companies only)
+        if (_config.UseCompoundInterest && isDynamic)
+        {
+            string compoundLabel;
+            Color compoundColor;
+            if (!string.IsNullOrEmpty(_account.CompoundActiveCompany) && _account.CompoundActiveCompany == CurrentCompany.Name)
+            {
+                compoundLabel = $"关闭复利 ({_account.CompoundDaysRemaining}天)";
+                compoundColor = Color.Gold;
+            }
+            else if (_account.CompoundCooldownDays > 0)
+            {
+                compoundLabel = $"冷却中 ({_account.CompoundCooldownDays}天)";
+                compoundColor = Color.Gray;
+            }
+            else if (string.IsNullOrEmpty(_account.CompoundActiveCompany))
+            {
+                compoundLabel = "开启复利";
+                compoundColor = Color.Gold;
+            }
+            else
+            {
+                compoundLabel = "复利已占用";
+                compoundColor = Color.DimGray;
+            }
+            DrawTextButton(b, _compoundBtn, compoundLabel, _hoverCompound, compoundColor);
         }
 
         // Stage 9: rescue invest button when company is Dying (restructuring)
@@ -843,7 +875,8 @@ internal class BankMenu : IClickableMenu
         }
 
         // Stage 14: online shopping button
-        if (_services.OnlineShoppingUnlocked && _onlineShopBtn.containsPoint(x, y))
+        bool isDynamic = _account.DynamicCompanies.Any(c => c.CompanyName == CurrentCompany.Name);
+        if (_services.OnlineShoppingUnlocked && !isDynamic && _onlineShopBtn.containsPoint(x, y))
         {
             Game1.playSound("bigSelect");
             var shopList = new List<Response>();
@@ -856,6 +889,7 @@ internal class BankMenu : IClickableMenu
                 {
                     "SeedShop" => "皮埃尔杂货店", "Blacksmith" => "铁匠铺", "Carpenter" => "木匠铺",
                     "Joja" => "Joja超市", "IslandTrade" => "姜岛商人", "DesertTrade" => "沙漠商人",
+                    "Sandy" => "桑迪的绿洲商店", "QiGemShop" => "齐先生商店",
                     _ => sid
                 };
                 string? closed = GetShopClosedReason(sid);
@@ -887,6 +921,32 @@ internal class BankMenu : IClickableMenu
                     Utility.TryOpenShopMenu(answer, "BankMod");
                 }
             });
+            return;
+        }
+
+        // Stage 15: compound interest button
+        if (_config.UseCompoundInterest && _compoundBtn.containsPoint(x, y))
+        {
+            if (!string.IsNullOrEmpty(_account.CompoundActiveCompany) && _account.CompoundActiveCompany == CurrentCompany.Name)
+            {
+                // Toggle off
+                _account.CompoundActiveCompany = "";
+                _account.CompoundDaysRemaining = 0;
+                _accountService.Save(_account);
+                Game1.chatBox?.addInfoMessage($"已关闭 {CurrentCompany.Name} 的复利模式。");
+            }
+            else if (string.IsNullOrEmpty(_account.CompoundActiveCompany) && _account.CompoundCooldownDays <= 0)
+            {
+                // Toggle on
+                _account.CompoundActiveCompany = CurrentCompany.Name;
+                _account.CompoundDaysRemaining = _config.CompoundDurationDays;
+                _accountService.Save(_account);
+                Game1.chatBox?.addInfoMessage($"已为 {CurrentCompany.Name} 开启复利模式（{_config.CompoundDurationDays} 天）！");
+            }
+            else
+            {
+                Game1.chatBox?.addErrorMessage("当前无法开启复利。");
+            }
             return;
         }
 
@@ -947,7 +1007,7 @@ internal class BankMenu : IClickableMenu
 
             // Scrollbar click in detail view
             int infoX = xPositionOnScreen + 40;
-            int infoY = yPositionOnScreen + 105;
+            int infoY = yPositionOnScreen + 90;
             int lineH = 26;
             int lineOffset = GetDepositLineOffset();
             int loanY = infoY + lineH * (lineOffset + 9);
@@ -1120,6 +1180,7 @@ internal class BankMenu : IClickableMenu
         _hoverBorrow14 = _borrow14Btn.containsPoint(x, y);
         _hoverRepay = _repayBtn.containsPoint(x, y);
         _hoverRescue = _rescueBtn.containsPoint(x, y);
+        _hoverCompound = _compoundBtn.containsPoint(x, y);
         _hoverOnlineShop = _onlineShopBtn.containsPoint(x, y);
         _hoverLoanDetail = _loanDetailBtn.containsPoint(x, y);
     }

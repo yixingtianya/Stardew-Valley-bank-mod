@@ -1,3 +1,4 @@
+using System.Text.Json;
 using BankMod.Data;
 using BankMod.Domain;
 using BankMod.Services.Abstractions;
@@ -10,6 +11,7 @@ namespace BankMod.Services.Core;
 public class RouteService : IRouteService
 {
     private readonly ICompanyManager _companyManager;
+    private readonly IBankAccountService _accountService;
     private readonly ModConfig _config;
     private readonly IMonitor _monitor;
 
@@ -26,9 +28,10 @@ public class RouteService : IRouteService
     public bool SeenCutscene { get; private set; }
     public bool ModEventPlaying { get; set; }
 
-    public RouteService(ICompanyManager companyManager, ModConfig config, IMonitor monitor)
+    public RouteService(ICompanyManager companyManager, IBankAccountService accountService, ModConfig config, IMonitor monitor)
     {
         _companyManager = companyManager;
+        _accountService = accountService;
         _config = config;
         _monitor = monitor;
     }
@@ -36,13 +39,31 @@ public class RouteService : IRouteService
     /// <summary>Restore save-specific persisted state.</summary>
     public void LoadFromSave(IModHelper helper)
     {
+        // Always restore company names from the original config.json (not in-memory, which may be mutated)
+        // Read config file fresh to get true original names
+        try
+        {
+            var raw = File.ReadAllText(Path.Combine(helper.DirectoryPath, "config.json"));
+            var originalConfig = System.Text.Json.JsonSerializer.Deserialize<ModConfig>(raw);
+            if (originalConfig?.Companies != null)
+                _originalCompanyNames = originalConfig.Companies.Select(c => c.Name).ToList();
+        }
+        catch { /* keep previous backup if file read fails */ }
+        if (_originalCompanyNames == null)
+            _originalCompanyNames = _config.Companies.Select(c => c.Name).ToList();
+
         _completedRoute = helper.Data.ReadSaveData<string>("bm_route") ?? "";
         _onlineShoppingUnlocked = helper.Data.ReadSaveData<string>("bm_shop") == "1";
         _routeEffectsApplied = helper.Data.ReadSaveData<string>("bm_fx") == "1";
         SeenCutscene = helper.Data.ReadSaveData<string>("bm_cut") == "1";
-        // Restore boost flags (normally set by ApplyRouteEffects, but the guard skips on reload)
         PierreBoosted = helper.Data.ReadSaveData<string>("bm_pb") == "1";
         JojaBoosted = helper.Data.ReadSaveData<string>("bm_jb") == "1";
+
+        // Always restore original company names before applying any route rename
+        if (_originalCompanyNames != null)
+            for (int i = 0; i < Math.Min(_originalCompanyNames.Count, _config.Companies.Count); i++)
+                _config.Companies[i].Name = _originalCompanyNames[i];
+
         if (_routeEffectsApplied)
         {
             var cm = _companyManager as CompanyManager;
@@ -52,6 +73,17 @@ public class RouteService : IRouteService
                 cm.PierreSuppressionDisabled = JojaBoosted;
                 cm.JojaSuppressionBoosted = JojaBoosted;
             }
+            // Apply rename (names were just restored to original above)
+            if (_completedRoute == "Community")
+            {
+                foreach (var c in _config.Companies)
+                    if (c.Name.Contains("Joja")) { c.Name = "皮埃尔子公司"; break; }
+            }
+            else if (_completedRoute == "Joja")
+            {
+                foreach (var c in _config.Companies)
+                    if (c.Name.Contains("皮埃尔")) { c.Name = "Joja子公司"; break; }
+            }
         }
         // Migration: old saves have fx=True but no boost flags — force re-apply
         if (_routeEffectsApplied && !string.IsNullOrEmpty(_completedRoute) && !PierreBoosted && !JojaBoosted)
@@ -59,6 +91,29 @@ public class RouteService : IRouteService
             _monitor.Log("[Route] Old save detected (fx without boost flags) — re-applying effects", LogLevel.Warn);
             _routeEffectsApplied = false;
         }
+        // Migration: old saves where route was completed before the loan-rename fix.
+        // Find old name from _originalCompanyNames, find new name from config.
+        bool migrated = helper.Data.ReadSaveData<string>("bm_mig") == "1";
+        if (_routeEffectsApplied && !string.IsNullOrEmpty(_completedRoute) && !migrated && _originalCompanyNames != null)
+        {
+            _monitor.Log($"[Route] Running loan-name migration for {_completedRoute}", LogLevel.Info);
+            string keyword = _completedRoute == "Community" ? "Joja" : "皮埃尔";
+            string? oldName = _originalCompanyNames.FirstOrDefault(o => o.Contains(keyword));
+            string? newName = _config.Companies.FirstOrDefault(c => _originalCompanyNames.Contains(c.Name))?.Name;
+            if (oldName != null && newName != null && oldName != newName)
+            {
+                var account = _accountService.Load();
+                bool changed = false;
+                foreach (var loan in account.Loans.Where(l => l.CompanyName == oldName))
+                { loan.CompanyName = newName; changed = true; }
+                foreach (var ca in account.CompanyAccounts.Where(a => a.CompanyName == oldName))
+                { ca.CompanyName = newName; changed = true; }
+                if (changed) _accountService.Save(account);
+                _monitor.Log($"[Route] Migrated '{oldName}' → '{newName}' in loans & accounts", LogLevel.Info);
+            }
+            helper.Data.WriteSaveData("bm_mig", "1");
+        }
+
         _monitor.Log($"[Route] LoadFromSave: route={_completedRoute}, shop={_onlineShoppingUnlocked}, fx={_routeEffectsApplied}, cut={SeenCutscene}, pb={PierreBoosted}, jb={JojaBoosted}", LogLevel.Info);
     }
 
@@ -124,12 +179,10 @@ public class RouteService : IRouteService
         if (_routeEffectsApplied) return;
         _routeEffectsApplied = true;
 
-        _monitor.Log($"[Route] ApplyRouteEffects: route={_completedRoute}, origNames={_originalCompanyNames?.Count ?? 0}", LogLevel.Info);
+        _monitor.Log($"[Route] ApplyRouteEffects: route={_completedRoute}", LogLevel.Info);
 
-        // Save and restore original company names
-        if (_originalCompanyNames == null)
-            _originalCompanyNames = _config.Companies.Select(c => c.Name).ToList();
-        else
+        // Restore original names (already backed up in LoadFromSave)
+        if (_originalCompanyNames != null)
             for (int i = 0; i < Math.Min(_originalCompanyNames.Count, _config.Companies.Count); i++)
                 _config.Companies[i].Name = _originalCompanyNames[i];
 
@@ -137,15 +190,40 @@ public class RouteService : IRouteService
         if (_completedRoute == "Community")
         {
             foreach (var c in _config.Companies)
-                if (c.Name.Contains("Joja")) { c.Name = "皮埃尔子公司"; break; }
+                if (c.Name.Contains("Joja"))
+                {
+                    string oldName = c.Name;
+                    c.Name = "皮埃尔子公司";
+                    var account = _accountService.Load();
+                    bool changed = false;
+                    foreach (var loan in account.Loans.Where(l => l.CompanyName == oldName))
+                    { loan.CompanyName = c.Name; changed = true; }
+                    foreach (var ca in account.CompanyAccounts.Where(a => a.CompanyName == oldName))
+                    { ca.CompanyName = c.Name; changed = true; }
+                    if (changed) _accountService.Save(account);
+                    break;
+                }
             PierreBoosted = true;
             if (cm != null) cm.PierreSuppressionBoosted = true;
-            _monitor.Log("[Route] CC effects: Joja renamed, Pierre ×2, PierreBoosted=true, cm.PierreSuppressionBoosted=true", LogLevel.Info);
+            _monitor.Log("[Route] CC effects: Joja renamed, Pierre ×2", LogLevel.Info);
         }
         else if (_completedRoute == "Joja")
         {
             foreach (var c in _config.Companies)
-                if (c.Name.Contains("皮埃尔")) { c.Name = "Joja子公司"; break; }
+                if (c.Name.Contains("皮埃尔"))
+                {
+                    string oldName = c.Name;
+                    c.Name = "Joja子公司";
+                    // Update all loan/account records to match new company name
+                    var account = _accountService.Load();
+                    bool accountChanged = false;
+                    foreach (var loan in account.Loans.Where(l => l.CompanyName == oldName))
+                    { loan.CompanyName = c.Name; accountChanged = true; }
+                    foreach (var ca in account.CompanyAccounts.Where(a => a.CompanyName == oldName))
+                    { ca.CompanyName = c.Name; accountChanged = true; }
+                    if (accountChanged) _accountService.Save(account);
+                    break;
+                }
             JojaBoosted = true;
             if (cm != null) { cm.PierreSuppressionDisabled = true; cm.JojaSuppressionBoosted = true; }
             _monitor.Log($"[Route] Joja effects: Pierre renamed, JojaBoosted={JojaBoosted}, cm.PierreSuppressionDisabled={cm?.PierreSuppressionDisabled}, cm.JojaSuppressionBoosted={cm?.JojaSuppressionBoosted}", LogLevel.Info);

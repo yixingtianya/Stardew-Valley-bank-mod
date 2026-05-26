@@ -95,6 +95,27 @@ public class CompanyManager : ICompanyManager
         // Re-check company generation: bankrupt companies may have freed spawn slots
         CheckAndGenerateNewCompanies(account);
 
+        // Stage 15: compound interest daily countdown
+        if (account.CompoundDaysRemaining > 0)
+        {
+            account.CompoundDaysRemaining--;
+            if (account.CompoundDaysRemaining <= 0)
+            {
+                account.CompoundActiveCompany = "";
+                account.CompoundCooldownDays = 112;
+                Game1.chatBox?.addInfoMessage("复利周期结束，进入 112 天冷却期。");
+                _monitor.Log("[Compound] Period ended, 112-day cooldown started", LogLevel.Info);
+            }
+        }
+        if (account.CompoundCooldownDays > 0)
+            account.CompoundCooldownDays--;
+
+        // Stage 15: FBN true/false event detection
+        TryTriggerFbnEvent(account);
+
+        // Reset temporary bankruptcy risk boost from previous day
+        account.FbnTempBoostCompany = "";
+
         // Daily status summary
         if (account.DynamicCompanies.Count > 0)
         {
@@ -399,6 +420,32 @@ public class CompanyManager : ICompanyManager
 
             company.Status = newStatus;
 
+            // Stage 15: daily natural bankruptcy check (value2.txt risk table)
+            if (!_config.DisableNaturalBankruptcy && company.RestructuringDaysRemaining <= 0
+                && company.Status != CompanyStatus.Protection && company.Status != CompanyStatus.New)
+            {
+                double dailyProb = company.Status switch
+                {
+                    CompanyStatus.Prosperous => 1.0 - Math.Pow(1.0 - _config.ProsperousAnnualRisk, 1.0 / 112),
+                    CompanyStatus.Stable => (1.0 - Math.Pow(1.0 - _config.ProsperousAnnualRisk, 1.0 / 112)) * 0.3,
+                    CompanyStatus.Hungry => 0.05,
+                    CompanyStatus.Dying => 0.15,
+                    _ => 0
+                };
+                // FBN true event: annual risk becomes today's daily probability
+                if (!string.IsNullOrEmpty(account.FbnTempBoostCompany)
+                    && account.FbnTempBoostCompany == company.CompanyName)
+                    dailyProb = _config.ProsperousAnnualRisk;
+
+                if (dailyProb > 0 && _rng.NextDouble() < dailyProb)
+                {
+                    _monitor.Log($"[Bankrupt] {company.CompanyName} went bankrupt (status={company.Status}, dailyProb={dailyProb:F4})", LogLevel.Warn);
+                    TransferLoansFromDyingCompany(account, company);
+                    LiquidateCompany(account, company);
+                    continue;
+                }
+            }
+
             // Fuel-starved but NOT in restructuring → immediate death
             if (company.FuelStock <= 0 && newStatus == CompanyStatus.Dying && company.RestructuringDaysRemaining <= 0)
             {
@@ -463,7 +510,13 @@ public class CompanyManager : ICompanyManager
             double rate = calculator.CalculateDepositRate(company, ctx);
             if (rate == 0) continue;
 
-            int interest = (int)(Math.Max(0, ca.BaseAmount) * rate);
+            // Stage 15: deposit compound interest
+            bool isCompound = _config.UseCompoundInterest
+                && !string.IsNullOrEmpty(account.CompoundActiveCompany)
+                && account.CompoundActiveCompany == ca.CompanyName
+                && account.CompoundDaysRemaining > 0;
+            int principal = isCompound ? Math.Max(0, ca.DepositBalance) : Math.Max(0, ca.BaseAmount);
+            int interest = (int)(principal * rate);
 
             if (interest == 0) continue;
 
@@ -522,6 +575,12 @@ public class CompanyManager : ICompanyManager
     {
         foreach (var ca in account.CompanyAccounts)
         {
+            // Stage 15: skip anti-compound detection when official compound is active
+            if (!string.IsNullOrEmpty(account.CompoundActiveCompany)
+                && account.CompoundActiveCompany == ca.CompanyName
+                && account.CompoundDaysRemaining > 0)
+                continue;
+
             // 1. Decrement penalty days
             if (ca.PenaltyDaysRemaining > 0)
                 ca.PenaltyDaysRemaining--;
@@ -816,6 +875,64 @@ public class CompanyManager : ICompanyManager
     // ============================================================================
 
     /// <summary>Transfer all loans from the dying company to the fixed company with the highest current loan rate.</summary>
+    private static readonly Random _fbnRng = new();
+
+    private void TryTriggerFbnEvent(BankAccountData account)
+    {
+        var companies = account.DynamicCompanies.Where(c => c.Status != CompanyStatus.Bankrupt).ToList();
+        if (companies.Count == 0) return;
+
+        int day = Game1.dayOfMonth;
+        string season = Game1.currentSeason;
+
+        // Season change: reset quotas
+        if (account.FbnSeason != season)
+        {
+            account.FbnSeason = season;
+            account.FbnTrueUsed = false;
+            account.FbnFalseUsed = 0;
+            account.FbnFalseQuota = _fbnRng.Next(2, 4); // 2-3 false
+            account.FbnLastEventDay = 0;
+        }
+
+        // Cannot be adjacent to yesterday's event
+        if (account.FbnLastEventDay > 0 && day == account.FbnLastEventDay + 1) return;
+
+        // Random trigger: ~15% chance per day if quota remains
+        int remaining = (account.FbnTrueUsed ? 0 : 1) + (account.FbnFalseQuota - account.FbnFalseUsed);
+        if (remaining <= 0) return;
+        if (_fbnRng.Next(100) >= 15 * remaining) return;
+
+        // Pick true or false (true prioritized if not used)
+        bool isReal = !account.FbnTrueUsed && _fbnRng.Next(remaining) == 0;
+        if (isReal)
+            account.FbnTrueUsed = true;
+        else
+            account.FbnFalseUsed++;
+
+        var company = companies[_fbnRng.Next(companies.Count)];
+        account.FbnLastEventDay = day;
+
+        if (isReal)
+        {
+            account.FbnTempBoostCompany = company.CompanyName;
+            account.FbnEventCompany = company.CompanyName;
+            account.FbnEventIsReal = true;
+            account.FbnEventDay = day;
+            account.FbnShowOutcome = false;
+            _monitor.Log($"[FBN] {season}{day}日 真消息: {company.CompanyName} (倒闭概率临时提升!)", LogLevel.Info);
+        }
+        else
+        {
+            account.FbnEventCompany = company.CompanyName;
+            account.FbnEventIsReal = false;
+            account.FbnEventDay = day;
+            account.FbnShowOutcome = false;
+            _monitor.Log($"[FBN] {season}{day}日 假消息: {company.CompanyName}", LogLevel.Info);
+        }
+        // TODO: show FBN news via TV system or chat
+    }
+
     private void TransferLoansFromDyingCompany(BankAccountData account, DynamicCompanyData company)
     {
         var companyLoans = account.Loans.Where(l => l.CompanyName == company.CompanyName && !l.IsFrozen).ToList();

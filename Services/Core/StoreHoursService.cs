@@ -22,6 +22,7 @@ public class StoreHoursService : IStoreHoursService
         ["Joja"] = "Joja",
         ["FishShop"] = "鱼店",
         ["DesertTrade"] = "绿洲",
+        ["Sandy"] = "绿洲",
         ["IslandTrade"] = "旅队",
     };
 
@@ -75,6 +76,20 @@ public class StoreHoursService : IStoreHoursService
                 || Game1.player.mailReceived.Contains(MailFlags.WillyBoatFixed);
             if (!hasBoat) return "姜岛未解锁";
         }
+        if (shopId == "Sandy")
+        {
+            // Sandy's Oasis: 9:00-23:00, closed Tue. Bus check same as DesertTrade.
+            bool hasBus = Game1.player.hasOrWillReceiveMail(MailFlags.CC_Vault)
+                || Game1.player.mailReceived.Contains(MailFlags.CC_Vault)
+                || Game1.player.hasOrWillReceiveMail(MailFlags.Joja_Bus)
+                || Game1.player.mailReceived.Contains(MailFlags.Joja_Bus);
+            if (!hasBus) return "公交未修复";
+        }
+        if (shopId == "QiGemShop")
+        {
+            bool hasWalnuts = Game1.netWorldState.Value.GoldenWalnutsFound >= 100;
+            if (!hasWalnuts) return "需要100个金色核桃";
+        }
 
         LoadIfNeeded();
         if (_hours == null) return null; // can't check, allow
@@ -120,23 +135,20 @@ public class StoreHoursService : IStoreHoursService
             var lines = File.ReadAllLines(path);
             foreach (var line in lines)
             {
-                // Find shop name in line
-                string? matchedShopId = null;
+                // Find ALL matching shop IDs for this keyword
+                var matchedIds = new List<string>();
                 foreach (var (sid, keyword) in ShopNameMap)
                 {
                     if (line.Contains(keyword))
-                    {
-                        matchedShopId = sid;
-                        break;
-                    }
+                        matchedIds.Add(sid);
                 }
-                if (matchedShopId == null) continue;
+                if (matchedIds.Count == 0) continue;
 
                 var parts = line.Split('\t');
                 if (parts.Length < 3) continue;
 
-                string timeStr = parts[1].Trim(); // "上午9:00 – 下午9:00"
-                string dayStr = parts[2].Trim();  // "周三"
+                string timeStr = parts[1].Trim();
+                string dayStr = parts[2].Trim();
 
                 var h = new StoreHours();
                 if (timeStr.Contains("全天"))
@@ -153,7 +165,6 @@ public class StoreHoursService : IStoreHoursService
                     }
                 }
 
-                // Parse closed day
                 foreach (var (label, idx) in DayOfWeekMap)
                 {
                     if (dayStr.Contains(label))
@@ -166,14 +177,22 @@ public class StoreHoursService : IStoreHoursService
                 if (dayStr == "无" || dayStr == "—" || string.IsNullOrEmpty(dayStr))
                     h.ClosedDays.Clear();
 
-                // Parse notes for special closes
                 string? notes = parts.Length > 3 ? parts[3] : null;
-                if (matchedShopId == "SeedShop" && notes != null && notes.Contains("夏季26日"))
-                {
-                    h.SeasonCloses["summer"] = 26;
-                }
 
-                _hours[matchedShopId] = h;
+                foreach (var sid in matchedIds)
+                {
+                    var hh = new StoreHours
+                    {
+                        OpenTime = h.OpenTime, CloseTime = h.CloseTime,
+                        IsAlwaysOpen = h.IsAlwaysOpen,
+                        ClosedDays = new HashSet<int>(h.ClosedDays),
+                        ClosedDayLabel = h.ClosedDayLabel,
+                        SeasonCloses = new Dictionary<string, int>(h.SeasonCloses)
+                    };
+                    if (sid == "SeedShop" && notes != null && notes.Contains("夏季26日"))
+                        hh.SeasonCloses["summer"] = 26;
+                    _hours[sid] = hh;
+                }
             }
             _monitor.Log($"[StoreHours] Loaded hours for {_hours.Count} shops from time.txt", LogLevel.Info);
         }

@@ -75,7 +75,7 @@ public class ModServices
         CreditLimitService = new CreditLimitService();
         MessageScheduler = new MessageScheduler();
         SeasonalFruitMarket = new SeasonalFruitMarket();
-        RouteService = new RouteService(CompanyManager, config, monitor);
+        RouteService = new RouteService(CompanyManager, BankAccountService, config, monitor);
         EventScriptService = new EventScriptService(helper, RouteService, monitor);
         StoreHoursService = new StoreHoursService(helper, monitor);
     }

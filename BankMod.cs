@@ -1,6 +1,7 @@
 using BankMod.Data;
 using BankMod.Domain;
 using BankMod.Services.Abstractions;
+using HarmonyLib;
 using BankMod.Services.Core;
 using BankMod.UI;
 using Microsoft.Xna.Framework;
@@ -51,7 +52,8 @@ internal sealed class BankMod : Mod
     private bool _shopIsJoja; // 记录当前商店是否为 Joja
     private int _lastMoneySnapshot;
     private int _bankruptGarnishCooldown;
-    private bool _bankruptExitMessageShown;
+    private bool _lastBankruptcyState;
+    private readonly Services.Core.DebtDialogueService _debtDialogue = new();
     private bool _pendingPierreMail;
     private bool _pendingMorrisMail;
     private readonly Vector2 _jojaMarkerTile = new(27, 7); // JojaMart supply shelf
@@ -105,6 +107,11 @@ internal sealed class BankMod : Mod
         helper.Events.Input.ButtonPressed += OnButtonPressed;
         helper.Events.Content.AssetRequested += OnAssetRequested;
 
+        // Stage 15: NPC dialogue patch
+        Harmony harmony = new("bankmod.npcdialogue");
+        harmony.PatchAll(typeof(Patches.NpcDialoguePatch).Assembly);
+        Patches.NpcDialoguePatch.Initialize(_debtDialogue, _config, () => _services.BankAccountService.Load());
+
         // V3.3 联机基础架构埋点
         helper.Events.Multiplayer.PeerConnected += OnPeerConnected;
         helper.Events.Multiplayer.ModMessageReceived += OnModMessageReceived;
@@ -124,7 +131,7 @@ internal sealed class BankMod : Mod
         // Stage 10: TV financial channel Harmony patches
         var tvHarmony = new HarmonyLib.Harmony("bankmod.tv");
         tvHarmony.PatchAll(typeof(Patches.TVPatch).Assembly);
-        Patches.FbnNewsGenerator.Initialize(_services, _config);
+        Patches.FbnNewsGenerator.Initialize(_services, _config, Helper.DirectoryPath);
         Monitor.Log("[TV] FBN channel Harmony patches applied", LogLevel.Debug);
 
         // Console command: debug season shop
@@ -176,6 +183,50 @@ internal sealed class BankMod : Mod
 
         // Console commands
         helper.ConsoleCommands.Add("spawn_phone", I18n.Command_SpawnPhone_Desc(), SpawnPhone);
+        helper.ConsoleCommands.Add("debt_test", "设置欠债/破产对话测试: debt_test <npc名> <心数>\n例: debt_test Pierre 8 触发高好感皮埃尔欠债对话", (cmd, args) =>
+        {
+            if (args.Length < 2) { Monitor.Log("用法: debt_test <npc名> <心数(0-10)>", LogLevel.Info); return; }
+            string npcName = args[0];
+            int hearts = int.TryParse(args[1], out int h) ? Math.Clamp(h, 0, 10) : 0;
+            var account = _services.BankAccountService.Load();
+            // Force bankruptcy for testing + clear tracking
+            account.IsInBankruptcy = true;
+            account.BankruptcyNpcGifted.Clear();
+            account.DebtNpcSpoken.Clear();
+            var npc = Game1.getCharacterFromName(npcName, mustBeVillager: false);
+            if (npc != null)
+            {
+                Monitor.Log($"[DebtTest] Before: hearts={Game1.player.getFriendshipHeartLevelForNPC(npcName)}, target={hearts}", LogLevel.Info);
+                // Directly set friendship data
+                if (!Game1.player.friendshipData.ContainsKey(npcName))
+                    Game1.player.friendshipData[npcName] = new Friendship(hearts * 250);
+                else
+                    Game1.player.friendshipData[npcName].Points = hearts * 250;
+                Monitor.Log($"[DebtTest] After: hearts={Game1.player.getFriendshipHeartLevelForNPC(npcName)}", LogLevel.Info);
+                _debtDialogue.TryInjectDialogue(npcName, account, _config);
+            }
+            _services.BankAccountService.Save(account);
+            Monitor.Log($"[DebtTest] Simulated {npcName} dialogue at {hearts} hearts (bankruptcy mode)", LogLevel.Info);
+        });
+        helper.ConsoleCommands.Add("fbn_test", "手动触发FBN真假事件: fbn_test <real|fake> [公司名]\n不填公司名则随机选择", (cmd, args) =>
+        {
+            bool isReal = args.Length > 0 && args[0] == "real";
+            string? target = args.Length > 1 ? args[1] : null;
+            var account = _services.BankAccountService.Load();
+            var companies = account.DynamicCompanies.Where(c => c.Status != CompanyStatus.Bankrupt).ToList();
+            if (companies.Count == 0) { Monitor.Log("[FBN] 无可用动态公司", LogLevel.Warn); return; }
+            var company = target != null
+                ? companies.FirstOrDefault(c => c.CompanyName.Contains(target)) ?? companies[Random.Shared.Next(companies.Count)]
+                : companies[Random.Shared.Next(companies.Count)];
+            account.FbnEventCompany = company.CompanyName;
+            account.FbnEventIsReal = isReal;
+            account.FbnEventDay = Game1.dayOfMonth;
+            account.FbnShowOutcome = false;
+            if (isReal) account.FbnTempBoostCompany = company.CompanyName;
+            _services.BankAccountService.Save(account); // Save() updates cache too
+            Patches.FbnNewsGenerator.InvalidateCache();  // clear TV cache only
+            Monitor.Log($"[FBN] 手动触发 {(isReal ? "真" : "假")}消息: {company.CompanyName}, day={account.FbnEventDay}", LogLevel.Info);
+        });
         helper.ConsoleCommands.Add("reset_phone_flag", "重置手机标志位", ResetPhoneFlag);
         helper.ConsoleCommands.Add("bank_mail", "向信箱直接投递银行信件: bank_mail <pierre|morris>\n用于测试中文邮件显示", TestBankMail);
 
@@ -390,8 +441,14 @@ internal sealed class BankMod : Mod
         gmcm.AddBoolOption(ModManifest,
             getValue: () => _config.UseCompoundInterest,
             setValue: val => _config.UseCompoundInterest = val,
-            name: () => "复利计算",
-            tooltip: () => "启用后利息计入本金产生复利；关闭后按本金计算单利");
+            name: () => "复利计算（存款/逾期）",
+            tooltip: () => "启用后：①动态公司可手动开启存款复利（利息滚入本金，全公司共用天数，冷却112天）②逾期贷款利息滚入本金。");
+        gmcm.AddNumberOption(ModManifest,
+            getValue: () => _config.CompoundDurationDays,
+            setValue: val => _config.CompoundDurationDays = val,
+            name: () => "复利持续天数",
+            tooltip: () => "复利周期持续天数（10-21天）。到期后进入112天冷却。",
+            min: 10, max: 21, interval: 1);
         gmcm.AddBoolOption(ModManifest,
             getValue: () => _config.AllowNegativeInterest,
             setValue: val => _config.AllowNegativeInterest = val,
@@ -564,6 +621,24 @@ internal sealed class BankMod : Mod
             name: () => "破产收入扣除比例 (%)", tooltip: () => "推荐 50%",
             min: 20, max: 80, interval: 5);
 
+        // ============== 自然倒闭风险（阶段十五） ==============
+        gmcm.AddSectionTitle(ModManifest, () => "自然倒闭风险（阶段十五）", () => "每日倒闭概率：繁荣=年风险^(1/112) 稳定=繁荣×0.3 饥饿=5% 濒死=15%");
+        gmcm.AddBoolOption(ModManifest,
+            getValue: () => _config.DisableNaturalBankruptcy,
+            setValue: val => _config.DisableNaturalBankruptcy = val,
+            name: () => "关闭自然倒闭风险（休闲模式）",
+            tooltip: () => "启用后所有状态日倒闭概率恒为0%，FBN消息照常播放但不影响实际概率。");
+        gmcm.AddTextOption(ModManifest,
+            getValue: () => (_config.ProsperousAnnualRisk * 100).ToString("F0") + "%",
+            setValue: val =>
+            {
+                if (double.TryParse(val.TrimEnd('%'), out double p))
+                    _config.ProsperousAnnualRisk = Math.Clamp(p / 100.0, 0.05, 1.0);
+            },
+            name: () => "繁荣期年倒闭风险",
+            tooltip: () => "可选 5%/15%/22%/30%/40%/50%",
+            allowedValues: new[] { "5%", "15%", "22%", "30%", "40%", "50%" });
+
         // ============== 债券交易（阶段九） ==============
         gmcm.AddSectionTitle(ModManifest, () => "债券交易与清算（阶段九）", () => "公司燃料耗尽倒闭时的债券转移和阶梯清算参数");
         gmcm.AddNumberOption(ModManifest,
@@ -720,6 +795,16 @@ internal sealed class BankMod : Mod
         _phoneReceivedToday = false;
         _lastReadMail = null;
         _lastMoneySnapshot = Game1.player?.Money ?? 0;
+
+        // Reset for new save: invalidate cache first, then load fresh
+        _services.BankAccountService.InvalidateCache();
+        var startAccount = _services.BankAccountService.Load();
+        _lastBankruptcyState = startAccount.IsInBankruptcy;
+
+        // Ensure online shop list has all required entries (migration for old configs)
+        foreach (var sid in new[] { "DesertTrade", "Sandy", "QiGemShop" })
+            if (!_config.OnlineShopList.Contains(sid))
+                _config.OnlineShopList.Add(sid);
 
         // Stage 14: Route check
         _services.RouteService.LoadFromSave(Helper);
@@ -886,6 +971,9 @@ internal sealed class BankMod : Mod
             int day = Game1.dayOfMonth;
 
             // Stage 7: Intercept Joja/Pierre shop → ask purpose
+            // Intercept if route completed OR Morris supply event has been seen (Joja only)
+            if (string.IsNullOrEmpty(_services.CompletedRoute) && !_morrisEventSeen) return;
+
             bool isJojaOrPierre = shopId.Contains("Joja") || Game1.currentLocation?.Name == "JojaMart";
             bool isPierre = shopId == "SeedShop" || Game1.currentLocation?.Name == "SeedShop";
             bool isJoja = shopId.Contains("Joja") || Game1.currentLocation?.Name == "JojaMart";
@@ -1423,22 +1511,26 @@ internal sealed class BankMod : Mod
             _services.RouteService.SaveToSave(Helper);
         }
 
-        // Stage 8 bankruptcy: garnish non-withdrawal money gains + banner
+        // Stage 8 bankruptcy: garnish + banner (state-change detection — no cross-save pollution)
         var account = _services.BankAccountService.Load();
         if (account.IsInBankruptcy)
-        {
             BankruptBanner.Show();
-            if (!_bankruptExitMessageShown) _bankruptExitMessageShown = true; // reset exit message flag
-        }
         else
-        {
             BankruptBanner.Hide();
-            if (_bankruptExitMessageShown)
-            {
-                _bankruptExitMessageShown = false;
-                Game1.chatBox?.addInfoMessage("恭喜，享受你的春天吧！");
-            }
+
+        if (_lastBankruptcyState && !account.IsInBankruptcy)
+        {
+            Game1.chatBox?.addInfoMessage("恭喜，享受你的春天吧！");
+            _debtDialogue.TryCongratulate(account);
+            _services.BankAccountService.Save(account);
         }
+        // Clear NPC tracking on bankruptcy entry
+        if (!_lastBankruptcyState && account.IsInBankruptcy)
+        {
+            account.BankruptcyNpcGifted.Clear();
+            _services.BankAccountService.Save(account);
+        }
+        _lastBankruptcyState = account.IsInBankruptcy;
 
         if (account.IsInBankruptcy && Game1.player.Money > _lastMoneySnapshot)
         {

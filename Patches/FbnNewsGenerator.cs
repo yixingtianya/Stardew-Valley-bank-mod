@@ -1,6 +1,7 @@
 using BankMod.Data;
 using BankMod.Domain;
 using BankMod.Services.Core;
+using StardewModdingAPI;
 using StardewValley;
 
 namespace BankMod.Patches;
@@ -9,24 +10,41 @@ internal static class FbnNewsGenerator
 {
     private static ModServices? _s;
     private static ModConfig? _c;
+    private static string _modDir = "";
     private static readonly Random _rng = new();
+    private static bool _bundleNewsShown;
+    private static int _lastGeneratedDay = -1;
+    private static List<string>? _cachedContent;
 
-    public static void Initialize(ModServices services, ModConfig config) { _s = services; _c = config; }
+    public static void Initialize(ModServices services, ModConfig config, string modDir) { _s = services; _c = config; _modDir = modDir; }
+    public static void InvalidateCache() { _cachedContent = null; _lastGeneratedDay = -1; }
 
     public static List<string> Generate()
     {
+        // Cache: regenerate only once per day
+        int today = Game1.dayOfMonth;
+        string season = Game1.currentSeason;
+        int cacheKey = Game1.year * 1000 + season.GetHashCode() + today;
+        _s?.Monitor.Log($"[FBN] Generate: cacheHit={_cachedContent != null && _lastGeneratedDay == cacheKey}, cachedContentNull={_cachedContent == null}, lastDay={_lastGeneratedDay}, cacheKey={cacheKey}", LogLevel.Info);
+        if (_cachedContent != null && _lastGeneratedDay == cacheKey)
+        {
+            _s?.Monitor.Log($"[FBN] Generate: returning cached content ({_cachedContent.Count} lines)", LogLevel.Info);
+            return _cachedContent;
+        }
+        _lastGeneratedDay = cacheKey;
+
         var lines = new List<string>();
         if (_s is null || _c is null) { lines.Add("FBN 初始化中..."); return lines; }
 
         var account = _s.BankAccountService.Load();
-        int today = (int)Game1.stats.DaysPlayed;
         string tomorrowWeather = Game1.weatherForTomorrow ?? "Sun";
         bool luckWeatherEnabled = _c.EnableLuckInfluence || _c.EnableWeatherInfluence;
 
         lines.Add("=== FBN · 芬吉尔共和国商业财经频道 ===");
         lines.Add("主播：巴德·坦纳顿  |  mod by yixingtianya");
 
-        if (TryBundleNews(lines)) return lines;
+        if (!_bundleNewsShown && TryBundleNews(lines)) { _bundleNewsShown = true; return lines; }
+        if (TryFbnEventNews(lines, account)) return lines;
         if (TrySpecialDateNews(lines, today)) return lines;
         if (TrySeasonTransitionNews(lines, account)) return lines;
         if (TryCompanyBirthNews(lines, account, today)) return lines;
@@ -41,6 +59,7 @@ internal static class FbnNewsGenerator
         else
             GetGeneralProgram(lines, account);
 
+        _cachedContent = lines;
         return lines;
     }
 
@@ -55,7 +74,7 @@ internal static class FbnNewsGenerator
             lines.Add("我们采访了不愿透露姓名的镇民，对方只说了三个字：'信他个……咳。'");
             return true;
         }
-        if (Game1.player.hasOrWillReceiveMail("ccIsComplete") || Game1.player.mailReceived.Contains("ccIsComplete"))
+        if (Game1.player.mailReceived.Contains("ccIsComplete"))
         {
             lines.Add(""); lines.Add("");
             lines.Add("社区中心全部献祭包完成。刘易斯镇长激动地宣布：'鹈鹕镇赢了！'");
@@ -71,6 +90,101 @@ internal static class FbnNewsGenerator
             return true;
         }
         return false;
+    }
+
+    // ====== B2: FBN 真假消息 ======
+    private static bool TryFbnEventNews(List<string> lines, BankAccountData account)
+    {
+        _s?.Monitor.Log($"[FBN] TryFbnEventNews: company={account.FbnEventCompany}, eventDay={account.FbnEventDay}, today={Game1.dayOfMonth}, showOutcome={account.FbnShowOutcome}", LogLevel.Info);
+        // Day of event: show crisis news from TV2.txt (both real and fake)
+        if (!string.IsNullOrEmpty(account.FbnEventCompany) && account.FbnEventDay == Game1.dayOfMonth && !account.FbnShowOutcome)
+        {
+            string text = ReadTv2Section("TV2.txt", account.FbnEventCompany);
+            _s?.Monitor.Log($"[FBN] ReadTv2Section result: len={text.Length}", LogLevel.Info);
+            if (!string.IsNullOrEmpty(text))
+            {
+                lines.Add(""); lines.Add("");
+                // Chunk long text at sentence boundaries, max ~80 chars per page
+                var sentences = text.Replace("。", "。|").Replace("？", "？|").Replace("！", "！|").Replace("……", "……|").Split('|');
+                var sb = new System.Text.StringBuilder();
+                foreach (var s in sentences)
+                {
+                    if (string.IsNullOrWhiteSpace(s)) continue;
+                    string chunk = s.Trim();
+                    if (sb.Length + chunk.Length > 80 && sb.Length > 0)
+                    {
+                        lines.Add(sb.ToString());
+                        sb.Clear();
+                    }
+                    sb.Append(chunk);
+                }
+                if (sb.Length > 0) lines.Add(sb.ToString());
+                _s?.Monitor.Log($"[FBN] Crisis news for {account.FbnEventCompany} (real={account.FbnEventIsReal})", LogLevel.Info);
+                account.FbnShowOutcome = true; // always show outcome tomorrow
+                return true;
+            }
+        }
+
+        // Day after event: show outcome (both real and fake show 活 unless company actually died)
+        if (account.FbnShowOutcome && Game1.dayOfMonth != account.FbnEventDay)
+        {
+            bool died = !account.DynamicCompanies.Any(c =>
+                c.CompanyName == account.FbnEventCompany && c.Status != CompanyStatus.Bankrupt);
+            string file = died ? "TV2死.txt" : "TV2活.txt";
+            string text = ReadTv2Section(file, account.FbnEventCompany);
+            if (!string.IsNullOrEmpty(text))
+            {
+                lines.Add(""); lines.Add("");
+                var sentences = text.Replace("。", "。|").Replace("？", "？|").Replace("！", "！|").Replace("……", "……|").Split('|');
+                var sb = new System.Text.StringBuilder();
+                foreach (var s in sentences)
+                {
+                    if (string.IsNullOrWhiteSpace(s)) continue;
+                    string chunk = s.Trim();
+                    if (sb.Length + chunk.Length > 80 && sb.Length > 0)
+                    { lines.Add(sb.ToString()); sb.Clear(); }
+                    sb.Append(chunk);
+                }
+                if (sb.Length > 0) lines.Add(sb.ToString());
+                _s?.Monitor.Log($"[FBN] Outcome news for {account.FbnEventCompany} (died={died}, wasReal={account.FbnEventIsReal})", LogLevel.Info);
+            }
+            account.FbnEventCompany = "";
+            account.FbnShowOutcome = false;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string ReadTv2Section(string fileName, string companyName)
+    {
+        try
+        {
+            string path = Path.Combine(_modDir, fileName);
+            if (!File.Exists(path)) return "";
+            var allLines = File.ReadAllLines(path);
+            bool inSection = false;
+            var section = new List<string>();
+            foreach (var line in allLines)
+            {
+                if (line.Contains("###") && line.Contains(companyName))
+                {
+                    inSection = true;
+                    continue;
+                }
+                if (inSection)
+                {
+                    if (line.StartsWith("###") || line.StartsWith("---"))
+                        break;
+                    string t = line.Trim();
+                    if (t.StartsWith(">")) t = t[1..].Trim();
+                    if (!string.IsNullOrEmpty(t) && !t.StartsWith("##"))
+                        section.Add(t);
+                }
+            }
+            return string.Join("\n", section);
+        }
+        catch { return ""; }
     }
 
     // ====== 三: 特殊日期 ======
