@@ -38,6 +38,7 @@ public class ModConfig
     ** 利率计算选项
     *********/
     public bool UseCompoundInterest { get; set; } = false;
+    public int CompoundDurationDays { get; set; } = 14; // 10-21
     public bool AllowNegativeInterest { get; set; } = false;
     public double DepositRateFloor { get; set; } = -0.02;
 
@@ -98,6 +99,8 @@ public class ModConfig
     /*********
     ** 公司倒闭与清算（阶段九）
     *********/
+    public double ProsperousAnnualRisk { get; set; } = 0.30; // 15%/22%/30%/40%/50%
+    public bool DisableNaturalBankruptcy { get; set; } = false; // casual mode
     public int ProsperousLoanLimitMult { get; set; } = 10;
     public int StableLoanLimitMult { get; set; } = 9;
     public int HungryLoanLimitMult { get; set; } = 6;
@@ -126,7 +129,7 @@ public class ModConfig
     public bool EnableDeliveryFee { get; set; } = true;
     public double DeliveryFeePercentage { get; set; } = 0.05;
     public int DeliveryFeeFlat { get; set; } = 0;
-    public List<string> OnlineShopList { get; set; } = new() { "SeedShop", "Blacksmith", "Carpenter", "Joja", "IslandTrade", "DesertTrade" };
+    public List<string> OnlineShopList { get; set; } = new() { "SeedShop", "Blacksmith", "Carpenter", "Joja", "IslandTrade", "DesertTrade", "Sandy", "QiGemShop" };
 
     /*********
     ** 显示设置

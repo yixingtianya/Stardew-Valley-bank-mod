@@ -40,6 +40,30 @@ public class BankAccountData
     /// <summary>Whether the player is in interest-debt state (dynamic company daily interest unpaid).</summary>
     public bool IsInInterestDebt { get; set; }
 
+    // Stage 15: deposit compound interest
+    public string CompoundActiveCompany { get; set; } = "";
+    public int CompoundDaysRemaining { get; set; }
+    public int CompoundCooldownDays { get; set; }
+
+    // Stage 15: FBN true/false bankruptcy news
+    public string FbnSeason { get; set; } = "";
+    public int FbnLastEventDay { get; set; }
+    public bool FbnTrueUsed { get; set; }
+    public int FbnFalseUsed { get; set; }
+    public int FbnFalseQuota { get; set; }
+    public string FbnTempBoostCompany { get; set; } = "";
+    public string FbnEventCompany { get; set; } = "";
+    public bool FbnEventIsReal { get; set; }
+    public bool FbnEventCompanyDied { get; set; }
+    public int FbnEventDay { get; set; }
+    public bool FbnShowOutcome { get; set; }
+
+    // Stage 15 NPC dialogue tracking
+    public List<string> DebtNpcSpoken { get; set; } = new();
+    public List<string> BankruptcyNpcGifted { get; set; } = new();
+    public List<string> CongratsNpcSpoken { get; set; } = new();
+    public bool DebtClearedCongratsShown { get; set; }
+
     // Legacy fields — migrated to Loans on load by LoanService
     public int LoanPrincipal { get; set; }
     public int AccumulatedInterest { get; set; }
