@@ -10,6 +10,7 @@ public class StoreHoursService : IStoreHoursService
 {
     private readonly IModHelper _helper;
     private readonly IMonitor _monitor;
+    private readonly IRouteService _routeService;
     private Dictionary<string, StoreHours>? _hours;
     private bool _loaded;
 
@@ -48,10 +49,11 @@ public class StoreHoursService : IStoreHoursService
         return t;
     }
 
-    public StoreHoursService(IModHelper helper, IMonitor monitor)
+    public StoreHoursService(IModHelper helper, IMonitor monitor, IRouteService routeService)
     {
         _helper = helper;
         _monitor = monitor;
+        _routeService = routeService;
     }
 
     public bool IsShopOpen(string shopId)
@@ -103,7 +105,18 @@ public class StoreHoursService : IStoreHoursService
         int day = Game1.dayOfMonth;
 
         // Closed day check
-        if (h.ClosedDays.Contains(dow)) return h.ClosedDayLabel;
+        // CC route completed → Pierre opens every day (vanilla SDV behavior)
+        if (h.ClosedDays.Contains(dow))
+        {
+            if (shopId == "SeedShop" && _routeService.CompletedRoute == "Community")
+            {
+                _monitor.Log("[StoreHours] Pierre: CC route completed, ignoring Wednesday closure", LogLevel.Trace);
+            }
+            else
+            {
+                return h.ClosedDayLabel;
+            }
+        }
         // Seasonal close (e.g. summer 26 for Pierre)
         if (h.SeasonCloses.TryGetValue(season, out int closedDay) && day == closedDay)
             return I18n.Get("str.28", new { day });

@@ -80,7 +80,7 @@ public class ModServices
         var cm = CompanyManager as CompanyManager;
         if (cm != null) cm.DisplayNameResolver = RouteService.GetDisplayName;
         EventScriptService = new EventScriptService(helper, RouteService, monitor);
-        StoreHoursService = new StoreHoursService(helper, monitor);
+        StoreHoursService = new StoreHoursService(helper, monitor, RouteService);
     }
 
     /// <summary>
