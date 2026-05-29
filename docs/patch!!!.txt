@@ -1,0 +1,174 @@
+[file name]: patch!!!.txt
+[file content begin]
+补丁报告：手动复利检测机制（严肃修正版）
+
+补丁版本：V3.7
+补丁类型：严重漏洞修复 + 安全机制新增
+依赖：V3.6（阶段六完成）
+影响范围：CompanyManager.OnDayStarted() 结算流程、利率计算、UI 警告
+紧急程度：极高（恶性破坏经济平衡）
+
+零、修改背景与原因
+
+0.1 问题定义
+
+玩家可通过“手动复利”操作永久破坏经济平衡：
+每日将产生的利息取出，再作为本金存回同一家公司，使本金呈日复利增长。
+该行为不需要任何资源投入，最终会导致玩家资金呈指数爆炸，使所有其他金融机制（动态公司利率、贷款风险、破产保护）彻底无效。
+
+0.2 严重性判定
+
+破坏性：指数增长一旦启动，可在数个游戏日内积累超出设计上限数千倍的资金。
+
+隐蔽性：表面上是正常的“取款-存款”操作，不与任何现有非法操作重叠。
+
+系统性：现有存取款自由设计无法防御此行为，且会产生连锁反应（破坏全局利率平衡、闲置破产机制）。
+
+因此，这是一个必须从根源上检测并惩罚的恶性漏洞。本次修改旨在在不限制正常存取款自由的前提下，精准识别并阻断手动复利行为。
+
+
+1. 修改 架构总.txt
+在 九、核心接口完整定义 部分更新接口：
+
+1.1 更新 IInterestCalculator 接口：
+在 CalculateDepositRate 方法的注释中增加，并在 InterestCalculationContext 中增加 IsPenaltyPeriod 字段：
+
+csharp
+public class InterestCalculationContext
+{
+    public decimal LuckValue { get; init; }
+    public WeatherType Weather { get; init; }
+    public int ConsecutiveShippingDays { get; init; }
+    public int SuppressionStacks { get; init; }
+    public int SuppressionRemainingDays { get; init; }
+    public bool IsPenaltyPeriod { get; init; } // 【V3.7 新增】手动复利惩罚标记
+}
+1.2 更新 CompanyAccount 数据模型：
+在数据模型章节追加：
+
+csharp
+public class CompanyAccount
+{
+    // ... 原有字段 ...
+
+    // === 【V3.7 新增】手动复利检测 ===
+    public int[] RecentPrincipalDeltas { get; set; } = new int[7];
+    public int WindowDayIndex { get; set; } = 0;
+    public bool HasFirstIncrease { get; set; } = false;
+    public int LastPositiveDelta { get; set; } = 0;
+    public int WindowPeak { get; set; } = 0;
+    public int WindowBreakCount { get; set; } = 0;
+    public int PenaltyDaysRemaining { get; set; } = 0;
+}
+1.3 更新每日结算流程：
+在 §五、每日结算流程定稿 的存款利息结算之后，计息之前插入：
+
+text
+6a. 【V3.7】手动复利检测：
+     a. 计算存款本金的每日增量（仅取正值）
+     b. 遍历滑动窗口内的增量序列：
+        - 若尚未触发“第一次变大”且当前增量 > 之前最近正增量 → 触发“第一次变大”，记录峰值，计数=1
+        - 若已触发且当前增量 > 峰值 → 刷新峰值，计数+1
+     c. 若窗口内峰值突破累计 ≥ 3次 → 标记该公司对该玩家的利率惩罚（7天，利率×10%）
+     d. 推进滑动窗口（每7天重置）
+     e. 递减惩罚期剩余天数
+10. 【V3.7】计息时检查惩罚标记，若处于惩罚期则 DepositRate ×= 0.10
+1.4 追加配置参数：
+在 §十、配置参数定稿表 末尾追加：
+
+参数	推荐值	允许范围	说明
+手动复利检测窗口	7天	固定	滚动窗口长度
+触发阈值（峰值突破次数）	3次	2-5次	窗口内峰值被刷新的次数
+惩罚利率折扣	10%	5%-20%	基础利率的乘数
+惩罚持续天数	7天	3-14天	覆盖完整操作周期
+1.5 追加代码审查清单：
+在 §12.2 末尾追加：
+
+校验项	严重程度
+手动复利检测在每日利息结算后执行	致命
+惩罚期利率在计息前被正确应用（乘以折扣系数）	致命
+滑动窗口正确滚动并在期满时清零状态	高
+窗口清零不丢失跨窗口的复利模式（临界处理）	高
+利率惩罚标记正确写入存档并在加载后恢复	高
+2. 修改 demand.txt
+在 阶段六之后，插入新的阶段：
+
+markdown
+## 阶段六-B：手动复利检测与惩罚【V3.7 新增】
+
+### 步骤 6-B.1：实现滑动窗口本金增量追踪
+- 在 CompanyAccount 数据结构中增加字段：
+  - `RecentPrincipalDeltas[7]`：7天滚动窗口的每日本金增量
+  - `WindowDayIndex`：当前窗口写入位置
+  - `HasFirstIncrease`：是否已触发“第一次变大”
+  - `LastPositiveDelta`：最近的正增量
+  - `WindowPeak`：当前窗口内的峰值
+  - `WindowBreakCount`：当前窗口内峰值突破次数
+  - `PenaltyDaysRemaining`：惩罚期剩余天数
+- 每日利息结算后，计算今日本金增量 = 今日本金 - 昨日本金
+- 若增量 > 0，写入窗口并执行检测逻辑
+- 测试：验证存款后窗口数据正确记录
+
+### 步骤 6-B.2：实现峰值突破检测算法
+- 实现检测逻辑：
+  1. 遍历窗口内每日的正本金增量
+  2. 若尚未触发“第一次变大”：跳过所有未变大的增量，直到出现增量 > 之前最近的正增量，记录为初始峰值，计数=1
+  3. “第一次变大”已触发后：每出现更大的正增量，更新峰值并累加计数
+  4. 负值和零值不参与比较，但保留在序列中不打断窗口
+- 触发条件：窗口内峰值突破累计 ≥ 3次（可配置）
+- 测试：
+  - 纯单利（每天存入等额）：计数始终为0
+  - 两天一停复利（增量递增）：触发惩罚
+  - 先杠杆后复利：杠杆不会成为护身符
+  - 恐慌逃离再入局：不误触发
+
+### 步骤 6-B.3：实现利率惩罚与应用
+- 触发惩罚后：该玩家在该公司的存款利率降至基础利率的10%（可配置）
+- 惩罚持续7天（可配置），不禁止存取款
+- 惩罚期剩余天数每日递减，归零后恢复原利率
+- 在 InterestCalculationContext 中新增 IsPenaltyPeriod 字段
+- 计息时检查该标记并应用折扣
+- 测试：
+  - 触发惩罚后验证利率正确降低
+  - 惩罚期结束后验证利率恢复
+  - 验证惩罚不影响其他公司和其他玩家
+3. 修改 index.txt
+在 阶段六 速查部分追加：
+
+markdown
+手动复利检测    patch!!!.txt §三（7天窗口/峰值突破/10%惩罚）
+手动复利实现要点    patch!!!.txt §七（CompanyManager.OnDayStarted中插入检测步骤）
+手动复利数据字段    patch!!!.txt §七（CompanyAccount新增字段）
+惩罚期利率应用    patch!!!.txt §七（InterestCalculationContext.IsPenaltyPeriod）
+在 代码审查致命级清单 部分追加：
+
+markdown
+【V3.7】手动复利检测在每日利息结算后、计息前执行 | 致命
+【V3.7】惩罚期利率折扣在计息前被正确应用 | 致命
+【V3.7】滑动窗口7天期满时正确清零状态 | 高
+4. 修改 架构总.txt → 勘误部分
+在文档末尾的勘误列表后追加：
+
+markdown
+勘误七：手动复利检测机制（V3.7）
+
+问题定义：
+玩家可通过“手动复利”操作破坏经济平衡：每日将产生的利息取出，再作为本金存回同一家公司，
+使本金呈日复利增长。
+
+检测核心：
+不看资金来源，只看本金增量是否持续变大。
+"第一次变大"事件发生后开始追踪，窗口内峰值突破 ≥ 3次即触发惩罚。
+
+设计原则：
+- 不追踪资金来源
+- 不限制存取款
+- 不跨公司比对
+- 不预设基准（杠杆不会自动成为护身符）
+- 参数可配
+
+实现位置：
+- CompanyManager.OnDayStarted()：利息结算后插入检测
+- DynamicCompanyInterestStrategy.CalculateDepositRate()：应用惩罚折扣
+- CompanyAccount：存窗口数据
+- InterestCalculationContext：传递惩罚标记

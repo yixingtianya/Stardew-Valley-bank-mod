@@ -1,0 +1,374 @@
+Stage 7 测试流程
+===============
+
+前置条件
+--------
+- 游戏已加载存档，Mod 正常启动
+- 已将生成阈值调低（GMCM: "生成所需累计出售数量" = 10，方便快速触发生成）
+- 已完成 Stage 6 基础测试（至少有一家动态公司存在，如土豆公司）
+- 如需查看内部数据，使用存档搜索工具或 SMAPI 的 save-data 导出功能
+
+═══════════════════════════════════════════════════════════════════
+测试一：连续售卖加成利率（7.1）
+═══════════════════════════════════════════════════════════════════
+
+目标：连续多天出货，利率每天上涨，达到上限后不再增加。
+
+Config 参考值（可在 GMCM 中查看/修改）：
+  - 存款连续加成：+0.5%/天（默认 0.005 = 0.5%）
+  - 存款加成上限：+5.0%（默认 0.05 = 5.0%）
+  - 贷款连续加成：+1.0%/天（默认 0.01 = 1.0%）
+  - 贷款加成上限：+10.0%（默认 0.10 = 10.0%）
+
+步骤：
+  1. 确保已有一家动态公司（如土豆公司），出货使其保护期结束（3天后）
+     -- 若已有活跃的土豆公司跳过此步
+     player_add (O)192 30
+     扔进出货箱 → 睡觉 × 4 天（保护期=3天，第4天起床即可见状态变化）
+
+  2. 记录当前利率（打开手机→土豆公司标签→查看"有效利率"）
+     记下利率: 存款 __15.830_%   贷款 _14.330__%//此时是刚停止售卖后第一天，推测变化与进入繁荣期有关
+
+  3. 第1天：出货土豆，睡觉
+     player_add (O)192 5
+     扔进出货箱 → 睡觉
+
+  4. 起床后打开手机→土豆公司，查看利率变化
+     预期: 存款利率增加 ≈ +0.5%，贷款利率增加 ≈ +1.0%
+//记下利率: 存款 __15.830_%   贷款 _16.330__%
+  5. 连续重复 10 天（第2-10天），每天记录利率对比前一天
+     预期: 存款利率逐天 +0.5%，直到 +5.0% 触顶不再增加
+           贷款利率逐天 +1.0%，直到 +10.0% 触顶不再增加
+//记下利率: 存款 __16.330_%   贷款 _17.330__%
+//记下利率: 存款 __16.830_%   贷款 _18.330__%
+//后续粘贴日志汇报
+[Dynamic Financial System (Refactored)] Player entered Farm - sending bank letter
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 1 items found
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +5 (cumulative=215)
+[Dynamic Financial System (Refactored)] New day started
+[Dynamic Financial System (Refactored)] 土豆公司: 利息 69302 g (有效利率 17.330%/天)
+[Dynamic Financial System (Refactored)] Player entered Farm - sending bank letter
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 1 items found
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +5 (cumulative=220)
+[Dynamic Financial System (Refactored)] New day started
+[Dynamic Financial System (Refactored)] 土豆公司: 利息 83658 g (有效利率 17.830%/天)
+[Dynamic Financial System (Refactored)] Player entered Farm - sending bank letter
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 1 items found
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +5 (cumulative=225)
+[Dynamic Financial System (Refactored)] New day started
+[Dynamic Financial System (Refactored)] 土豆公司: 利息 101338 g (有效利率 18.330%/天)
+[Dynamic Financial System (Refactored)] Player entered Farm - sending bank letter
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 1 items found
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +5 (cumulative=230)
+[Dynamic Financial System (Refactored)] New day started
+[Dynamic Financial System (Refactored)] 土豆公司: 利息 123185 g (有效利率 18.830%/天)
+[Dynamic Financial System (Refactored)] Showing bank choice dialog
+[Dynamic Financial System (Refactored)] Player entered Farm - sending bank letter
+[Dynamic Financial System (Refactored)] Showing bank choice dialog
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 1 items found
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +10 (cumulative=240)
+[Dynamic Financial System (Refactored)] New day started
+[Dynamic Financial System (Refactored)] 土豆公司: 利息 150267 g (有效利率 19.330%/天)
+[Dynamic Financial System (Refactored)] Showing bank choice dialog
+
+[Dynamic Financial System (Refactored)] Player entered Farm - sending bank letter
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 1 items found
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +10 (cumulative=250)
+[Dynamic Financial System (Refactored)] New day started
+[Dynamic Financial System (Refactored)] 土豆公司: 利息 183952 g (有效利率 19.830%/天)
+[Dynamic Financial System (Refactored)] Player entered Farm - sending bank letter
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 1 items found
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +10 (cumulative=260)
+[Dynamic Financial System (Refactored)] New day started
+[Dynamic Financial System (Refactored)] 土豆公司: 利息 225988 g (有效利率 20.330%/天)
+[Dynamic Financial System (Refactored)] Player entered Farm - sending bank letter
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 1 items found
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +10 (cumulative=270)
+[Dynamic Financial System (Refactored)] New day started
+[Dynamic Financial System (Refactored)] 土豆公司: 利息 271931 g (有效利率 20.330%/天)
+  观察数据点:
+    连续1天 → 存款 +0.5%,  贷款 +1.0%
+    连续2天 → 存款 +1.0%,  贷款 +2.0%
+    连续5天 → 存款 +2.5%,  贷款 +5.0%
+    连续10天→ 存款 +5.0%(触顶), 贷款 +10.0%(触顶)
+    连续11天→ 存款仍是 +5.0%, 贷款仍是 +10.0%（不再增加）
+
+验证:
+  - 第5天利率 = 基础利率 + 2.5%（存款）/ +5.0%（贷款）
+  - 第10天后利率不再增加（触及上限）
+  - 存档中 ConsecutiveSellDays 数值正确递增
+
+═══════════════════════════════════════════════════════════════════
+测试二：停售衰减利率（7.2）
+═══════════════════════════════════════════════════════════════════
+
+目标：停止出货后，利率每天衰减。
+
+Config 参考值：
+  - 存款衰减：-0.5%/天（默认 0.005 = 0.5%）
+  - 贷款衰减：-1.0%/天（默认 0.01 = 1.0%）
+//记下利率: 存款 __20.330_%   贷款 _25.330__%
+步骤：
+  1. 接续测试一（已有连续售卖天数后），停止出货土豆
+     什么都不卖，直接睡觉
+
+  2. 起床后打开手机→土豆公司，查看利率
+     预期: 存款利率 -0.5%, 贷款利率 -1.0%（不再有连续加成，开始衰减）
+
+  3. 连续 5 天不出货土豆，每天记录利率
+     注意: 手机每打开一次都会刷新利率显示
+//记下利率: 存款 __14.830_%   贷款 _14.330__% 贷款利率低于存款利率，存在问题
+//记下利率: 存款 __14.830_%   贷款 _14.330__% 第二天无变化，存在问题，同时发现21%依旧为繁荣模式，不合理
+//记下利率: 存款 __14.830_%   贷款 _14.330__% 第三天无变化，存在问题，9%燃料进入稳定模式，不合理。
+//记下利率: 存款 __14.830_%   贷款 _14.330__% 第三天无变化，存在问题，0%燃料进入饥饿模式，不合理
+//总结，不出售衰减设置失败，且模式对应的燃料占比错误，燃料耗尽进入饥饿模式而没消失，日消耗燃料确实有配合模式变化。模式不符合value3.txt的3.1要求。
+  观察数据点:
+    停售第1天 → 存款基础-0.5%, 贷款基础-1.0%
+    停售第2天 → 存款基础-1.0%, 贷款基础-2.0%
+    停售第3天 → 存款基础-1.5%, 贷款基础-3.0%
+    ...
+    衰减直到触及 DepositRateFloor（默认 -2%）或进入负数
+
+验证:
+  - 连续售卖天数归零（ConsecutiveSellDays = 0）
+  - 利率每天 -0.5%（存款）/ -1.0%（贷款）
+  - 若配置允许负利率(AllowNegativeInterest=true)，衰减可低于0%
+  - 若不允许负利率(AllowNegativeInterest=false)，利率在0%处钳位
+
+═══════════════════════════════════════════════════════════════════
+测试三：竞争对手售卖打压（7.3）
+═══════════════════════════════════════════════════════════════════
+
+目标：去皮埃尔/Joja 商店直接卖出作物，对应公司利率立即下降。
+//joja售卖没有
+Config 参考值：
+  - 最大单层跌幅：-2.0%/层（默认 0.02 = 2.0%）
+  - 打压持续时间：5 天
+  - 最大叠层数：3 层
+
+步骤：
+  1. 确保有土豆公司存在
+  2. 获取土豆：
+     player_add (O)192 30
+
+  3. 去皮埃尔的杂货店（广场北侧），与皮埃尔对话打开商店
+     右键背包中的土豆 → 点击卖出（不要用出货箱！）
+
+  4. 关闭商店菜单
+     预期: SMAPI 控制台输出类似：
+     [Stage7] Suppression: Potato x30 sold -> stacks=2 days=5
+
+  5. 打开手机→土豆公司，查看利率
+     预期: 存款利率立即下降 4%（2层 × 2%/层）
+           贷款利率立即下降 4%（2层 × 2%/层）
+
+  6. 检查燃料库存：
+     预期: 燃料也减少了（RecordExternalSale: -5 FP/个，30个 = -150 FP = -15.0 当量）
+
+验证:
+  - 商店关闭后，利率立即变化（无需睡觉）
+  - SMAPI 日志显示 suppression 信息（stacks + days）
+  - 存档中 CropSuppressions 包含：{"CropCode":"Potato","Stacks":2,"RemainingDays":5}
+  - 燃料库存下降
+
+═══════════════════════════════════════════════════════════════════
+测试四：打压叠层与衰减（7.3 续）
+═══════════════════════════════════════════════════════════════════
+
+目标：验证多次售卖叠层和逐天衰减。
+
+步骤：
+  1. 接续测试三，连续 3 天去皮埃尔卖土豆（每天卖 20+ 个）
+     player_add (O)192 30 → 去皮埃尔商店卖 → 回家睡觉
+
+  第1天（测试三已做）: stacks=2, days=5
+  第2天: 卖30个→ stacks=min(2+2, 3)=3, days=5
+  第3天: 卖30个→ stacks=min(3+2, 3)=3, days=5（已达上限）
+
+  2. 停止卖土豆，每日查看存档中的 CropSuppressions 数据
+     每天睡觉后 RemainingDays 减 1
+
+  3. 当 RemainingDays=1 → 睡觉后 → RemainingDays=0 → Stacks 减 1
+     若 Stacks>0 → 重置 RemainingDays=5
+     若 Stacks=0 → 条目从 CropSuppressions 中移除
+
+  观察数据点:
+    关闭商店当天 → stacks=2, days=5
+    第1天起床后 → stacks=2, days=4
+    ...
+    第5天起床后 → stacks=2, days=0 → 减层 → stacks=1, days=5
+    第10天起床后 → stacks=1, days=0 → 减层 → stacks=0 → 删除条目
+
+    利率变化:
+    第1-5天: 扣 2×2%=4%
+    第6-10天: 扣 1×2%=2%
+    第11天起: 无打压（条目删除）
+
+验证:
+  - 打压叠层最大 3 层（不会超过）
+  - RemainingDays 归零时正确减层
+  - 最后一层到期后 Cropsuppressions 条目删除
+  - 利率在打压结束后恢复正常（仅受连续/衰减影响）
+
+═══════════════════════════════════════════════════════════════════
+测试五：计算顺序验证（7.4）
+═══════════════════════════════════════════════════════════════════
+
+目标：验证多因素叠加时计算顺序正确。
+
+公式: 基础利率 → +连续/衰减 → -压制 → ×运气 → +天气 → 钳位
+
+步骤（同时有连续售卖 + 打压）：
+  1. 先连续出货土豆 5 天（建立 +2.5% 存款加成）
+  2. 同时去皮埃尔卖土豆（施加 2 层打压 = -4%）
+  3. 打开手机查看利率
+
+  预期计算（假设土豆 R=15.33%, 无天气/满运气=0）：
+    基础存款 = R = 15.33%  (0%<R≤20%, 不打折)
+    + 连续加成 = +2.5%
+    - 打压 = -4.0%
+    = 13.83%
+    × 运气(假设 DailyLuck=0, LuckCoeff=2.5) = ×1.0
+    + 天气(SunBonus=0) = 0
+    最终 = 13.83%
+
+  测试下雨天（IsRaining=true, RainBonus 可能非零）：
+    预期: 在 × 运气后 + RainBonus
+
+验证:
+  - 数值在合理范围（+连续&-打压后×运气+天气）
+  - 雨天比晴天利率多/少 RainBonus 的值
+  - 负利率在 AllowNegativeInterest=false 时被钳位到 0%
+
+═══════════════════════════════════════════════════════════════════
+测试六：商店买卖燃料联动（7.3 + Stage 6 燃料系统联动）
+═══════════════════════════════════════════════════════════════════
+
+目标：商店卖出作物同时触发打压 + 燃料扣除。
+
+步骤：
+  1. 记录手机中土豆公司燃料库存: ___ 当量
+  2. 获取 10 个土豆: player_add (O)192 10
+  3. 去皮埃尔商店卖 10 个土豆
+  4. 关闭商店 → 打开手机查看
+
+  预期变化:
+    利率: -2%（1层打压）
+    燃料: -50 FP = -5.0 当量（10个 × 5 FP/个）
+
+验证:
+  - 燃料库存减少 5.0 当量
+  - 利率同时下降（双重效果）
+
+═══════════════════════════════════════════════════════════════════
+测试七：旧存档兼容性
+═══════════════════════════════════════════════════════════════════
+//测试正常
+目标：Stage 6 旧存档（无 CropSuppressions 数据）正常加载不报错。
+
+步骤：
+  1. 使用 Stage 6 的存档（没有 CropSuppressions 字段）
+  2. 启动 Mod → 正常进入游戏
+  3. 打开手机 → 正常显示各公司
+
+验证:
+  - SMAPI 无报错
+  - BankMenu 显示正常（连续天数=0、无打压层数）
+  - 利息结算正常（连续0天→衰减逻辑）
+
+═══════════════════════════════════════════════════════════════════
+快速测试指令备忘（Stardew 1.6 语法）
+═══════════════════════════════════════════════════════════════════
+
+| 指令 | 作用 |
+|------|------|
+| player_add (O)192 30 | 获取 30 个土豆 |
+| player_add (O)258 30 | 获取 30 个蓝莓 |
+| player_add (O)400 30 | 获取 30 个草莓 |
+| player_add (O)260 30 | 获取 30 个辣椒 |
+| player_add (O)256 30 | 获取 30 个番茄 |
+| player_add (O)304 30 | 获取 30 个啤酒花 |
+| player_add money 100000 | 加 10 万金币 |
+| player_setmoney 50000 | 设置金币为 5 万 |
+| debug warp SeedShop 5 10 | 传送到皮埃尔杂货店（快速测试商店打压）|
+| spawn_phone | 重新获取手机 |
+| reset_phone_flag | 重置手机标记位 |
+
+═══════════════════════════════════════════════════════════════════
+验证数据速查
+═══════════════════════════════════════════════════════════════════
+
+7.1 连续售卖加成:
+  - 存档路径: save → CustomData → smapi/mod-data/bankmod.../bankmod_account_data
+  - 搜索 "ConsecutiveSellDays": 应每日递增（有出货）或归零（无出货）
+  - UI: 连续天数不直接显示，通过利率变化间接观察
+
+7.2 停售衰减:
+  - ConsecutiveSellDays=0 时触发衰减
+  - 利率每天减少 SellDecayDepositPerDay(0.5%)/SellDecayLoanPerDay(1.0%)
+
+7.3 竞争打压:
+  - 存档搜索 "CropSuppressions":
+    [{"CropCode":"Potato","Stacks":2,"RemainingDays":5}]
+  - UI: 打开手机可观察利率是否被压低
+  - 燃料: 同步减少（RecordExternalSale）
+
+7.4 计算顺序:
+  - 查看利息日志: "[公司名]: 利息 X g (有效利率 Y%/天)"
+  - 有效利率 = 多因素叠加结果
+
+═══════════════════════════════════════════════════════════════════
+建议测试顺序
+═══════════════════════════════════════════════════════════════════
+
+  1. 测试一 → 验证连续售卖利率上涨（最基础）
+  2. 测试二 → 验证停售衰减（与一互补）
+  3. 测试三 → 验证商店打压（核心新功能）
+  4. 测试四 → 验证叠层和衰减周期
+  5. 测试五 → 验证多因素叠加和计算顺序
+  6. 测试六 → 验证燃料联动
+  7. 测试七 → 验证旧存档兼容
+
+═══════════════════════════════════════════════════════════════════
+关键修改文件清单（如需 debug 回查代码）
+═══════════════════════════════════════════════════════════════════
+
+| 文件 | 变更内容 |
+|------|----------|
+| Domain/InterestCalculationContext.cs | +ConsecutiveSellDays, +SuppressionStacks, +HasSoldHistory, +DecayDays |
+| Data/BankAccountData.cs | +CropSuppressions, +CropSuppressionData 类 |
+| Data/CropShipmentData.cs | +DecayDays（累计衰减计数）|
+| Services/Core/Interest/FixedCompanyInterestStrategy.cs | GetConsecutiveAdjustment (HasSoldHistory + DecayDays gate) |
+| Services/Core/Interest/DynamicCompanyInterestStrategy.cs | GetConsecutiveAdjustment + GetSuppressionDrop, 改用 company 基利率 |
+| Services/Abstractions/ICompanyManager.cs | +ApplySuppression(BankAccountData, string, int) |
+| Services/Core/CompanyManager.cs | +TickSuppression, +ApplySuppression, 3-tier 规则移至 GetAllCompanyDefinitions |
+| Services/Core/ShipmentTrackingService.cs | UpdateConsecutiveDays 同时维护 DecayDays |
+| Services/Core/ModServices.cs | +DynamicInterestCalculator, FixedInterestCalculator |
+| BankMod.cs | _preShopInventory, OnMenuChanged 商店检测 |
+| UI/BankMenu.cs | BuildContext 传入新字段; 动态公司使用 DynamicInterestCalculator |
+
+═══════════════════════════════════════════════════════════════════
+2024-05-04 修复记录
+═══════════════════════════════════════════════════════════════════
+
+修复 1: 衰减改为累计（DecayDays）
+  - 之前: 停售后每天固定 -0.5%/-1.0%，不累计
+  - 现在: 停售第1天 -0.5%, 第2天 -1.0%, 第3天 -1.5%，直到触及上限
+  - DecayDays 有售卖时归零；无售卖且 HasSoldHistory 时叠加
+  - 衰减上限与连续加成上限相同（存款±5%, 贷款±10%）
+
+修复 2: BankMenu 动态公司使用正确策略
+  - 之前: 所有公司（含动态）都用 FixedCompanyInterestStrategy 显示
+  - 现在: 动态公司用 DynamicCompanyInterestStrategy，固定公司用 Fixed
+  - 这修复了手机上动态公司贷款基础利率显示为 R（而非 R×1.5）的问题
+
+修复 3: 3-tier 税率规则统一在 GetAllCompanyDefinitions 应用
+  - 之前: DynamicCompanyInterestStrategy 内部重复计算 3-tier
+  - 现在: CompanyDefinition 的基利率已含 3-tier 规则，策略直接使用
+  - 这使"基础利率"显示正确: 土豆贷款基础 = 15.33%×1.5 = 23%
+
+已知待处理:
+  - 测试三: Joja 杂货店游戏内不收农作物（只有皮埃尔收），正常游戏现象
+  - 取款不减少累计利息（AccumulatedInterest），玩家不确定取走的是本金还是利息
+  - 利息累计可超过存款上限，但无法存入（提示超限），可正常取出
+  - 公司状态（繁荣/稳定/饥饿/濒死）阈值需对照 value3.txt 确认

@@ -1,0 +1,2322 @@
+# 动态金融公司系统 — 架构重构报告 V3.1
+# 生成日期：2026-05-29 | 基准代码：BankMod v2.8.0（Stage 8-10 完成 + V3.19-V3.20 Bug 修复）
+#
+# 此文档由代码逆向分析 + 架构重构生成，记录重构后的
+# 接口对齐状态、目录结构、文件清单、Stage 6-10 实际执行情况及与 V3.1 设计的差异。
+
+
+一、代码事实源声明
+
+  本文档基于以下事实源编写，具有最高权威性：
+  1. 重构后代码库（F:\agency-agents-main\Stardew Valley bank mod refactored\）
+  2. V3.1 设计蓝图（架构总.txt）
+  3. V3.5 增量补丁（Crops values.txt 数据源）
+
+  若本文档与 V3.1 设计文档冲突，以本文档（代码）为准。
+
+
+二、架构目录结构（阶段六完成后）
+
+  Stardew Valley bank mod refactored/
+  ├── BankMod.cs                       1258行  入口点（组合根），SMAPI 事件适配 + DayEnding + 信件反射注入
+  ├── GmcmSafetyPatch.cs                 99行  GMCM 反射安全层（Harmony Prefix）
+  ├── BankMod.csproj                     24行  .NET 6.0 / SMAPI + Harmony 项目文件
+  ├── manifest.json                      16行  v2.2.0，UniqueID: bankmod.dynamicfinancialsystem
+  │
+  ├── Messages/                          [X] 计划中（V3.3）
+  │   ├── BankOperationRequest.cs        [X] 客机金融操作请求
+  │   └── BankDataSync.cs                [X] 主机数据同步广播
+  │
+  ├── Domain/                           3 个值对象
+  │   ├── CompanyId.cs                   23行  强类型公司标识符
+  │   ├── CompanyStatus.cs               29行  8 状态枚举（New/Protection/Bankrupt/CompoundCooldown 等）
+  │   └── InterestCalculationContext.cs  20行  利率计算上下文（天气/运气/配置）
+  │
+  ├── Services/
+  │   ├── Abstractions/                  10 个接口（5 已实现，5 计划中）
+  │   │   ├── IInterestCalculator.cs     14行  [OK] 已实现 — FixedCompany + DynamicCompany 双策略
+  │   │   ├── IDepositLimitProvider.cs    10行  [OK] 已实现 — DepositLimitProvider
+  │   │   ├── ICompanyManager.cs          23行  [OK] 已实现 — CompanyManager（5 方法，含资产池）
+  │   │   ├── IBankAccountService.cs      11行  [OK] 已实现 — BankAccountService
+  │   │   ├── IFuelService.cs            27行  [OK] 已实现 — FuelService（6 方法，FP 整数化）
+  │   │   ├── ILoanService.cs            16行  [OK] 已实现 — LoanService（V3.4）
+  │   │   ├── IBankruptcyHandler.cs       13行  [X] 计划中（P2）
+  │   │   ├── ICreditLimitService.cs      11行  [X] 计划中（P2）
+  │   │   ├── IMessageScheduler.cs        15行  [X] 计划中（P4）
+  │   │   └── ISeasonalFruitMarket.cs     12行  [X] 计划中（P4）
+  │   │
+  │   └── Core/                          12 个实现（7 已实现，5 桩）
+  │       ├── CompanyManager.cs          349行  公司生命周期编排器（Stage 6 完全重写）
+  │       ├── BankAccountService.cs       39行  账户 CRUD
+  │       ├── DepositLimitProvider.cs     15行  存款上限提供者
+  │       ├── ModServices.cs             124行  手动 DI 容器（双 InterestCalculator 注入 + 信件触发）
+  │       ├── ShipmentTrackingService.cs  129行  出货箱监控（Stage 6 新增，35 条目 ID 映射字典）
+  │       ├── Interest/
+  │       │   ├── FixedCompanyInterestStrategy.cs  43行  固定公司利率策略
+  │       │   └── DynamicCompanyInterestStrategy.cs 121行  动态公司利率（V3.5 patch5 三段式折扣）
+  │       ├── FuelService.cs             114行  [OK] 完整实现（FP 整数化，非对称套利规则）
+  │       ├── LoanService.cs             ~150行  [OK] 完整实现（V3.4）
+  │       ├── BankruptcyHandler.cs        18行  [X] 桩
+  │       ├── CreditLimitService.cs       19行  [X] 桩
+  │       ├── MessageScheduler.cs         15行  [X] 桩
+  │       └── SeasonalFruitMarket.cs      19行  [X] 桩
+  │
+  ├── Data/                              5 个数据类（+2 Stage 6 新增）
+  │   ├── ModConfig.cs                  217行  ~45 字段 + CompanyDefinition（12 字段含 CropCode/IsDynamic）
+  │   ├── BankAccountData.cs             64行  BankAccountData + CompanyAccount + LoanRecord
+  │   │                                       + CropShipmentData + DynamicCompanyData（Stage 6）
+  │   ├── CropShipmentData.cs           NEW    按作物出货追踪（Stage 6 新增）
+  │   ├── DynamicCompanyData.cs         NEW    动态公司运行时数据（Stage 6 新增）
+  │   ├── BankAccountManager.cs          19行  静态持久化工具（保留兼容）
+  │   └── CropDataProvider.cs           ~XX行  作物 R/DBase/Smax/Y 数据源
+  │
+  ├── UI/                                4 个 UI 组件
+  │   ├── BankMenu.cs                  ~480行  银行主界面（统一固定+动态公司，燃料显示，资产池）
+  │   ├── BankChoiceMenu.cs             148行  手机入口
+  │   ├── NumberInputMenu.cs            180行  数字键盘
+  │   └── MailboxDialog.cs              241行  邮件弹窗（当前未激活）
+  │
+  ├── 根目录工具文件                     5 个
+  │   ├── PhoneItem.cs                   17行  手机常量（Type=Quest，不可出售/出货）
+  │   ├── I18n.cs                       209行  翻译访问器
+  │   ├── IGenericModConfigMenuApi.cs    34行  GMCM 接口
+  │   ├── GmcmSafetyPatch.cs             99行  GMCM 反射安全层
+  │   └── BankMailbox.cs                 66行  物理邮箱物体（未引用）
+  │
+  ├── i18n/default.json                  55行  中英双语翻译
+  └── assets/phone.png                    1.7MB 手机纹理
+
+  代码统计（仅 .cs 源文件，阶段六后实际）：
+  ┌──────────────────────────────────────────────────────────────┬──────┬──────┐
+  │ 层级                                                         │ 文件 │ 行数 │
+  ├──────────────────────────────────────────────────────────────┼──────┼──────┤
+  │ Domain（值对象）                                              │   3  │   72 │
+  │ Services.Abstractions（接口）                                 │  10  │  152 │
+  │ Services.Core（实现 + 桩）                                    │  12  │ ~1050 │
+  │ Data（数据模型）                                              │   5  │ ~300 │
+  │ UI（用户界面）                                                │   4  │ ~1050 │
+  │ 根目录（入口 + 工具 + 安全补丁）                              │   6  │ ~1100 │
+  ├──────────────────────────────────────────────────────────────┼──────┼──────┤
+  │ 总计                                                         │  40  │~3724 │
+  └──────────────────────────────────────────────────────────────┴──────┴──────┘
+
+  版本演进对照：
+  ┌──────────────────────────────────────────────────────────────┬──────┬──────┐
+  │ 原项目（v1.2.0，平面 3 命名空间）                            │  12  │~2100 │
+  │ 重构项目（v2.0.0，4 层架构）                                 │  36  │ 2639 │
+  │ 重构项目（v2.2.0，阶段六完成，4 层架构）                     │  40  │~3724 │
+  └──────────────────────────────────────────────────────────────┴──────┴──────┘
+
+
+三、V3.1 接口对齐情况（阶段六完成后精确对照）
+
+  以下逐接口列出 V3.1 设计目标与重构后代码的精确匹配状态。
+
+  ┌─────────────────────────────────────────────────────────────────────────────┐
+  │ 接口                   V3.1 方法数  已实现  桩/计划中  对齐率               │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │ IInterestCalculator         2         2+2       0        100% [OK] 双策略  │
+  │ IDepositLimitProvider       1         1         0        100% [OK]          │
+  │ ICompanyManager             5         5         0        100% [OK]          │
+  │ IBankAccountService         3         3         0        100% [OK] (新增)   │
+  │ IFuelService                6         6         0        100% [OK] Stage 6  │
+  │ ILoanService                5         5         0        100% [OK] V3.4     │
+  │ IBankruptcyHandler          2         0         2          0% [X]           │
+  │ ICreditLimitService         2         0         2          0% [X]           │
+  │ IMessageScheduler           3         0         3          0% [X]           │
+  │ ISeasonalFruitMarket        2         0         2          0% [X]           │
+  ├─────────────────────────────────────────────────────────────────────────────┤
+  │ 合计                      29        22         7         76%                │
+  └─────────────────────────────────────────────────────────────────────────────┘
+
+  【注】V3.1 设计中的 15+ ICompanyManager 方法在实际代码中精简为 5 个核心方法
+  （YAGNI 原则）。实际对齐率以代码实现为准。
+
+  详细方法对照：
+
+  3.1 IInterestCalculator — [OK] 已实现（Stage 6 扩展为双策略）
+    CalculateDepositRate(CompanyDefinition, InterestCalculationContext) : double
+      -> FixedCompanyInterestStrategy.CalculateDepositRate()
+      -> DynamicCompanyInterestStrategy.CalculateDepositRate() [Stage 6 新增]
+    CalculateLoanRate(CompanyDefinition, InterestCalculationContext) : double
+      -> FixedCompanyInterestStrategy.CalculateLoanRate()
+      -> DynamicCompanyInterestStrategy.CalculateLoanRate() [Stage 6 新增]
+    选择逻辑：company.IsDynamic ? _dynamicInterestCalculator : _fixedInterestCalculator
+
+  3.2 IDepositLimitProvider — [OK] 已实现
+    GetDepositLimit(CompanyId, CompanyStatus, int) : int
+      -> DepositLimitProvider.GetDepositLimit()
+      注：当前仅返回 baseLimit，动态修正在计划中。
+
+  3.3 ICompanyManager — [OK] 已实现（Stage 6 完成：5 方法）
+    OnDayStarted() : void
+      -> CompanyManager.OnDayStarted() — 8 步完整管线
+      [Services/Core/CompanyManager.cs:50]
+    GetStatus(CompanyId) : CompanyStatus
+      -> CompanyManager.GetStatus() — 从 DynamicCompanies 查找，默认 Stable
+      [Services/Core/CompanyManager.cs:76]
+    GetActiveCompanies() : IReadOnlyList<CompanyId>
+      -> CompanyManager.GetActiveCompanies() — 通过 GetAllCompanyDefinitions 获取
+      [Services/Core/CompanyManager.cs:84]
+    GetAllCompanyDefinitions(BankAccountData) : List<CompanyDefinition> [Stage 6 新增]
+      -> 合并 _config.Companies + 活跃 DynamicCompanies
+      [Services/Core/CompanyManager.cs:91]
+    GetMaxWithdrawal(BankAccountData, CompanyDefinition) : int [Stage 6 新增]
+      -> V3.3.1 资产池取款限制：effectiveLoanLimit - outstandingPrincipal
+      [Services/Core/CompanyManager.cs:125]
+
+  3.4 IBankAccountService — [OK] 已实现（V3.1 未定义，重构新增）
+    Load() : BankAccountData
+      -> BankAccountService.Load()
+    Save(BankAccountData) : void
+      -> BankAccountService.Save()
+    GetOrCreateAccount(BankAccountData, string) : CompanyAccount
+      -> BankAccountService.GetOrCreateAccount()
+
+  3.5 IFuelService — [OK] 已实现（Stage 6：从桩替换为完整实现）
+    文件：Services/Core/FuelService.cs（114行，6个方法）
+    UpdateDailyInventory(BankAccountData account) : void
+      -> 每日扣减 DBase * statusCoefficient * 10 FP，参数化 account（无内部 Load/Save）
+    GetSatisfactionRate(CompanyId) : double
+      -> FuelStock / (DBase * 10)，内部 Load（只读）
+    RecordShippingBinSale(BankAccountData, string cropCode, int quantity, int quality)
+      -> +FP：quantity*10 + quality bonus，参数化 account
+    RecordExternalPurchase(string cropCode, int quantity) : -5 FP/个
+    RecordExternalSale(string cropCode, int quantity) : -5 FP/个
+    GetDisplayFuelStock(CompanyId) : FuelStock / 10.0
+
+  3.6 ILoanService — [OK] 已实现（V3.4）
+    文件：Services/Core/LoanService.cs（~150行，5个方法）
+
+  3.7 IBankruptcyHandler — [X] 计划中（桩实现，零业务逻辑）
+  3.8 ICreditLimitService — [X] 计划中（桩实现，硬编码返回值）
+  3.9 IMessageScheduler — [X] 计划中（桩实现，硬编码配额）
+  3.10 ISeasonalFruitMarket — [X] 计划中（桩实现，始终返回 false/空数组）
+
+
+四、值对象对齐情况（阶段六完成后）
+
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │ 值对象                           V3.1 状态  代码位置               │
+  ├─────────────────────────────────────────────────────────────────────┤
+  │ CompanyId                        [OK] 已实现  Domain/CompanyId.cs    │
+  │ CompanyStatus（8 枚举值）        [OK] 已实现  Domain/CompanyStatus.cs │
+  │ InterestCalculationContext       [OK] 已实现  Domain/InterestCalculationContext.cs │
+  │ CropShipmentData                 [NEW] 已实现  Data/CropShipmentData.cs（Stage 6）│
+  │ DynamicCompanyData               [NEW] 已实现  Data/DynamicCompanyData.cs（Stage 6）│
+  │ SeasonTransitionStatus           [X] 未创建   —                      │
+  │ CompanyCompoundInterestStatus    [X] 未创建   —                      │
+  │ CompanyProtectionStatus          [X] 未创建   —                      │
+  │ FuelSatisfactionStatus           [X] 未创建   —                      │
+  └─────────────────────────────────────────────────────────────────────┘
+
+  注：5/9 值对象已实现。SeasonTransitionStatus 等需等待对应功能启动后再创建。
+  CropShipmentData 和 DynamicCompanyData 为 Stage 6 新增持久化数据模型。
+
+
+五、每日结算流程 — 阶段六实际对照
+
+  步骤  V3.1 设计                                阶段六实际实现                    状态
+  ─────────────────────────────────────────────────────────────────────────────────
+   1   适配器捕获时间/天气/运气              InterestCalculationContext           [OK]
+   2   FuelService 更新库存与满足率          UpdateDailyInventory(account) +     [OK]
+                                            UpdateCompanyStatuses(account)
+   3   保护期内跳过倒闭检测                  New 状态保护期（3天）内不判定状态    [OK]
+   3a  MessageScheduler 临时风险覆盖         未实现                              [X]
+   4   CompanyManager 检测倒闭条件            未实现（阶段八）                    [X]
+   4a  清除临时风险覆盖                      未实现                              [X]
+   5   CompanyManager 传入状态参数            GetStatus 从 FuelStock 真实判定     [OK]
+   6   InterestCalculator 计算日利率          FixedCompany + DynamicCompany       [OK]
+                                            (按 IsDynamic 选择策略)
+   7   LoanService.DailyTick()              完整实现（V3.4）                    [OK]
+   8   BankruptcyHandler.Check()             桩                                  [X]
+   9   检查复利冷却                          未实现                              [X]
+   10  AccountService.CreditInterest()       SettleDailyInterest(account)        [OK]
+                                            + 晨间通知（ShowMorningInterestNotification）
+   10a 保护期结束状态迁移                    UpdateCompanyStatuses 统一处理      [OK]
+   11  检查新公司生成条件                     CheckAndGenerateNewCompanies        [OK]
+                                            (50累计, 4上限, 2/季, 冷却, 排除)
+   11a 生成失败反馈                          未实现                              [X]
+   12  持久化                                BankAccountService.Save()            [OK]
+   13  UI 刷新                               聊天框 addInfoMessage               [OK]
+
+  实际 8 步流程（CompanyManager.OnDayStarted）：
+  1. Load account
+  2. UpdateConsecutiveDays(account)        — ShipmentTrackingService
+  3. ResetSeasonalSpawnCounter(account)    — 换季重置
+  4. CheckAndGenerateNewCompanies(account) — 动态公司生成
+  5. UpdateDailyInventory(account)         — FuelService
+     UpdateCompanyStatuses(account)        — 状态判定
+  6. SettleDailyInterest(account)          — 利息结算
+  7. LoanService.DailyTick(account, config, fixedInterestCalculator)
+  8. Save account
+
+  完成度：实际流程 8 步中 6 [OK] + 2 [X]（倒闭/复利冷却）= 75%
+  （V3.1 设计 19 步含大量预留子步骤；实际实现以核心功能为准）
+
+
+六、关键架构变更
+
+  6.1 消除静态单例
+    原代码：internal static BankMod? Instance（全局可变状态）
+    重构后：ModServices 聚合对象，通过构造函数注入到 UI 组件
+    优势：可测试、无全局状态、依赖关系显式化
+
+  6.2 接口提取
+    原代码：所有逻辑内联在 BankMod.cs（883行 Monolith）
+    重构后：5 个核心接口 + 实现（IInterestCalculator, ICompanyManager,
+            IDepositLimitProvider, IBankAccountService, IFuelService）
+    优势：策略可替换、单元测试可行、符合开闭原则
+
+  6.3 分层架构
+    原代码：3 个平面命名空间（BankMod, BankMod.Data, BankMod.UI）
+    重构后：4 层架构
+      Domain/          — 值对象、枚举（零依赖）
+      Services/Abstractions/ — 接口定义（仅依赖 Domain + Data）
+      Services/Core/   — 业务逻辑实现（依赖 Abstractions）
+      UI/              — 表现层（依赖 Services.Abstractions + Services.Core）
+    优势：依赖方向内聚、新增功能只需实现接口
+
+  6.4 利率计算策略化（Stage 6 完成双策略）
+    原代码：BankMod.GetEffectiveDepositRate() static 方法
+    重构后：IInterestCalculator 接口 + FixedCompanyInterestStrategy + DynamicCompanyInterestStrategy
+    动态策略：V3.5 patch5 三段式折扣（R>20%×0.5, R<=20%不打折, 贷款硬下限+1%）
+    选择逻辑：company.IsDynamic ? dynamic : fixed
+
+  6.5 BankMod.cs 瘦身
+    原代码：883 行（业务 + UI + GMCM + 事件）
+    重构后：750 行（SMAPI 事件适配 + GMCM + 四步延迟 + 手机管理 + DayEnding）
+    业务逻辑迁移：SettleDailyInterest -> CompanyManager
+                  利率计算 -> FixedCompany/DynamicCompanyInterestStrategy
+                  账户管理 -> BankAccountService
+                  燃料管理 -> FuelService
+                  出货追踪 -> ShipmentTrackingService
+    新增：DayEnding 事件（出货箱处理 + 手机移除）、Phone Type=Quest
+
+  6.6 桩模式（Stub Pattern）
+    5 个"计划中"接口均有桩实现，返回安全默认值（0、false、空数组）。
+    未来实现只需替换对应桩为真实实现，无需改动调用方代码。
+
+  6.7 GMCM 反射安全层（Harmony Patch）
+    问题：GMCM 1.12.0 每帧对 activeClickableMenu 反射 titleInPosition，DialogueBox 无此字段导致崩溃
+    解决：GmcmSafetyPatch.cs — Harmony Prefix 补丁
+    兜底：SafeDialogueBox（DialogueBox 子类 + public bool titleInPosition 字段）
+
+  6.8 跨公司套利保护
+    setValue 不做钳制，滑块完全自由
+    保存时检测 4 条规则（所有 LoanRate >= 所有 DepositRate）
+    非法时拒绝写盘 + 四步延迟序列
+
+  6.9 燃料库存系统（Stage 6 新增）
+    FP 整数化：1 标准作物 = 10 FP，内部 int，UI 层 /10 显示
+    非对称规则：出货 +10/+20/+15 FP，购买/卖出 -5 FP
+    日消耗：DBase * statusCoefficient * 10 FP
+    状态驱动：满足率 = FuelStock / (DBase * 10)，4 级判定（>150%/80-150/30-80/<30）
+
+  6.10 出货追踪与动态公司生成（Stage 6 新增）
+    ShipmentTrackingService：DayEnding 扫描出货箱，35 条目 QID->CropCode 映射字典
+    生成条件：累计出售量 >= 50 + 总席位 < 4 + 单季 < 2 + 无同作物 + 无冷却 + 非排除
+    保护期：3 天（New 状态，不参与状态判定）
+    倒闭冷却：当前季节（同一季节实例，跨季自动解除）【V3.8 修正】
+
+
+七、功能平移与新增验证
+
+  以下功能点逐项对照，确认重构后功能完整：
+
+  原功能保持：
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ 功能点                          原实现           重构后              │
+  ├──────────────────────────────────────────────────────────────────────┤
+  │ 手机领取（邮件/位置检测）        OnUpdateTicked    [OK] 保持         │
+  │ 手机丢失检测                     OnInventoryChanged [OK] 保持 + 防误判│
+  │ 右键手机打开银行                 OnButtonPressed   [OK] 保持         │
+  │ 银行入口对话框                   BankChoiceMenu    [OK] 保持         │
+  │ 银行主界面（公司标签页）         BankMenu          [OK] 保持 + 统一列表│
+  │ 数字键盘输入                     NumberInputMenu   [OK] 保持         │
+  │ 存取款操作（含上限校验）         receiveLeftClick  [OK] 保持 + 资产池 │
+  │ 借款操作（7天/14天/加贷合并）     —                 [OK] 新增（V3.4） │
+  │ 还款操作（手动/部分/全额）        —                 [OK] 新增（V3.4） │
+  │ 到期自动扣款（现金优先）          —                 [OK] 新增（V3.4） │
+  │ 宽限期强制扣款（现金+全部存款）   —                 [OK] 新增（V3.4） │
+  │ 全局借款杠杆限制                  —                 [OK] 新增（V3.4） │
+  │ 每日利息结算（复利/单利）        SettleDailyInterest [OK] 保持       │
+  │ 天气对利率影响                   GetWeatherBonus   [OK] 保持         │
+  │ 运气对利率影响                   luck * coeff      [OK] 保持         │
+  │ 利息通知（晨间聊天框）           addInfoMessage    [OK] 保持         │
+  │ GMCM 配置菜单                    RegisterModConfig [OK] 保持         │
+  │ GMCM 跨公司套利保护              —                 [OK] 新增（V3.3） │
+  │ GMCM 反射安全层（Harmony）       —                 [OK] 新增（V3.3） │
+  │ 控制台命令（spawn/reset）        ConsoleCommands   [OK] 保持         │
+  │ 邮件弹窗（MailboxDialog）        已定义未激活      [OK] 保持（未激活）│
+  │ SaveData 持久化                  Read/WriteSaveData [OK] 保持        │
+  │ 自定义物品管线（Data/Objects）   AssetRequested    [OK] 保持         │
+  │ 手机纹理生成                     CreatePhoneSprite [OK] 保持         │
+  └──────────────────────────────────────────────────────────────────────┘
+
+  Stage 6 新增功能：
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ 功能点                                    实现位置                  │
+  ├──────────────────────────────────────────────────────────────────────┤
+  │ 出货箱扫描与追踪（35 作物 ID 映射）        ShipmentTrackingService   │
+  │ 连续售卖天数统计                           ShipmentTrackingService   │
+  │ 动态公司生成（4上限/2每季/50累计/冷却/排除）CompanyManager            │
+  │ 燃料库存系统（FP 整数化、非对称规则）      FuelService               │
+  │ 燃料日消耗（DBase * 状态系数 * 10）        FuelService               │
+  │ 公司状态判定（满足率 4 级映射）             CompanyManager            │
+  │ 动态公司利率（3 段式折扣 R 锚定）          DynamicCompanyInterestStrategy │
+  │ 资产池取款限制（V3.3.1）                   CompanyManager.GetMaxWithdrawal │
+  │ 统一银行界面（固定+动态公司）               BankMenu._companyList    │
+  │ 燃料/状态显示（颜色编码、作物名称）         BankMenu.draw             │
+  │ 标签页保持（操作后不跳回）                  BankMenu 14 回调          │
+  │ 手机不可出售（Type=Quest）                  BankMod + PhoneItem      │
+  │ 手机防误判（背包拖动保护）                  OnInventoryChanged       │
+  │ 复利默认关闭                               ModConfig.UseCompoundInterest=false │
+  │ 保护期 3 天                                CompanyManager.NewCompanyProtectionDays=3 │
+  │ GMCM 燃料标签中文化（日耗/燃料上限）        BankMod.FormatCropLine    │
+  └──────────────────────────────────────────────────────────────────────┘
+
+  结论：所有原功能均已完成平移，0 功能丢失。Stage 6 16 项新功能全部实现。
+
+
+八、构建验证结果
+
+  构建命令：dotnet build "f:\agency-agents-main\Stardew Valley bank mod refactored\BankMod.csproj" -c Release
+  构建结果：[OK] Build succeeded. 0 Warning(s), 0 Error(s)（1 个既有 CS8602 nullable 警告）
+  输出位置：bin/Release/net6.0/BankModRefactored.dll
+  部署目标：D:\steam\steamapps\common\Stardew Valley\Mods\BankMod
+  发布包：  bin/Release/net6.0/BankMod 2.0.0.zip
+  框架：    .NET 6.0 (net6.0)
+  SMAPI：   4.0.0+
+  语言：    C# 10 (ImplicitUsings + Nullable)
+  Stage 9 后文件数：~48 个 .cs（含 RescueInvestMenu.cs），~4700 行
+
+
+九、与原项目的差异摘要
+
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │ 维度                  原项目 (v1.2.0)        重构项目 (v2.2.0)       │
+  ├──────────────────────────────────────────────────────────────────────┤
+  │ 文件数                12 个 .cs              40 个 .cs               │
+  │ 接口数                0（仅外部 GMCM API）   10 个自定义接口         │
+  │ 已实现接口            0                      7（含 IFuelService + ILoanService）│
+  │ 值对象                0                      5（含 CropShipment/DynamicCompany）│
+  │ 枚举                  0                      1（8 个成员）           │
+  │ 架构层                3 个平面命名空间       4 层（Domain/Services/UI/Data）│
+  │ 协调机制              静态单例 Instance      手动 DI（ModServices）  │
+  │ 入口点行数            883 行                  750 行                  │
+  │ 业务逻辑位置          BankMod.cs 内联        分派到 7 个 Service     │
+  │ 利率策略              静态方法                双策略（固定+动态）     │
+  │ 计划中功能桩           0                      5                       │
+  │ 编译警告              0                      0                       │
+  │ Harmony 补丁           0                      1（GmcmSafetyPatch）   │
+  │ 燃料系统               0                      FP 整数化（114行）     │
+  │ 动态公司               0                      完整生成管线            │
+  └──────────────────────────────────────────────────────────────────────┘
+
+
+十、后续迁移路线图（阶段六完成后更新）
+
+  P0（已完成 — 基础重构）：
+    [OK] 定义 CompanyId、CompanyStatus
+    [OK] 抽取 IInterestCalculator 接口 + FixedCompanyInterestStrategy
+    [OK] 实现 CompanyManager（从 BankMod 迁移核心逻辑）
+    [OK] 实现 IBankAccountService + IDepositLimitProvider
+    [OK] UI 适配接口注入
+    [OK] 6 个计划中接口的桩实现
+    [OK] GmcmSafetyPatch Harmony 安全补丁（V3.3）
+    [OK] 跨公司套利保护 + 四步延迟保存拒绝（V3.3）
+
+  P1（公司模块完善 — 阶段六完成）：
+    [OK] CompanyManager 接入 FuelService 驱动状态变迁
+    [OK] 动态公司生成条件检测（50累计/4上限/2每季/冷却/排除）
+    [OK] 资产池取款限制（GetMaxWithdrawal — V3.3.1）
+    [ ] 实现动态存款上限修正因子（DepositLimitProvider 当前仅返回 baseLimit）
+
+  P2（贷款与破产）：
+    [OK] 实现 ILoanService（发放/日扣息/宽限期/还款）— V3.4
+    [ ] 实现 IBankruptcyHandler（检测/清算/划扣）— 阶段八
+    [ ] 实现 ICreditLimitService（净资产计算/动态额度分配）— 阶段十二
+    [ ] 完善 LoanService 杠杆接入 ICreditLimitService
+    [ ] 实现入股救市翻倍逻辑（注资上限=原始贷款上限*50%，复活翻倍）— V3.3.1
+    [ ] 实现倒闭返还逻辑（按状态阶梯返还，阶梯校验强制生效）— V3.3.2
+
+  P3（燃料与经济 — 阶段六完成）：
+    [OK] 实现 IFuelService（库存机制、满足率计算、FP 整数化）
+    [OK] 实现 DynamicCompanyInterestStrategy（3 段式折扣 R 锚定）
+    [OK] 接入 BankMod.OnDayStarted() 完整每日管线
+    [OK] 非对称套利规则（出货+10，购买-5）
+
+  P4（内容系统）：
+    [ ] 实现 IMessageScheduler（金融频道、三幕剧、真假消息）
+    [ ] 实现 ISeasonalFruitMarket（季节果实购买）
+
+  P5（V3.2 + V3.3 补丁）：
+    [OK] 利率值从 value.txt 调整至 value2.txt — V3.2
+    [OK] SuppressMaxDropPerDay 修正为 -0.02 — V3.2
+    [OK] GMCM 跨公司套利保护 — V3.3
+    [OK] GmcmSafetyPatch Harmony 补丁 — V3.3
+    [OK] SafeDialogueBox + OpenModMenu — V3.3
+    [OK] IGenericModConfigMenuApi 新增 OpenModMenu — V3.3
+    [OK] V3.3 联机模式架构文档补丁写入 — 2026-05-02
+    [OK] V3.3 燃料 FP 整数化文档补丁写入 — 2026-05-02
+    [OK] V3.3.1 公司状态操作限制重构文档写入 — 2026-05-02
+    [OK] V3.3.2 公司倒闭存款返还机制文档写入 — 2026-05-02
+    [OK] 勘误六 联机财产分配文档写入 — 2026-05-02
+    [ ] 固定公司锁定单利（移除全局复利开关对固定公司的影响）
+    [ ] 复利冷却机制（112天）
+    [ ] 实现多人模式消息协议
+    [ ] 实现联机财产分配 SplitBankAccountsAmongPlayers
+
+  P6（V3.3 多人模式）：
+    [ ] 步骤 13.1：主机配置同步
+    [ ] 步骤 13.2：客机金融操作消息协议
+    [ ] 步骤 13.3：日结算全量快照同步
+    [ ] 步骤 13.4：联机转账
+
+
+十一、阶段六执行报告（新增）
+
+  11.1 实现概况
+
+  开始日期：2026-05-02
+  完成日期：2026-05-03
+  修改/新增文件：14 个（4 新增 + 10 变更）
+  新增代码行数：~1085 行
+  构建状态：[OK] 0 Warning(s), 0 Error(s)
+  测试状态：[OK] 8 项测试全部通过（见 Stage6测试流程.txt）
+
+  11.2 实现内容
+
+  6.1 出货追踪系统：
+    - ShipmentTrackingService（129行）：DayEnding 扫描出货箱
+    - 35 条目 QualifiedItemId -> CropCode 映射字典
+    - CropShipmentData 持久化数据模型
+    - ProcessShipments + UpdateConsecutiveDays 双方法
+
+  6.2 连续售卖天数：
+    - 昨日有售出 -> 连续天数+1，否则归零
+    - 在 DayStarted 阶段更新（OnDayStarted 第 2 步）
+
+  6.3 动态公司生成：
+    - CheckAndGenerateNewCompanies：50累计/4上限/2每季/冷却/排除
+    - GenerateDynamicCompany：初始燃料=Smax*0.3*10 FP，保护期3天
+    - IsCropOnBankruptcyCooldown：1完整季节冷却（含跨年处理）
+    - Coffee Bean 排除（CropDataProvider.IsExcluded）
+    - DynamicCompanyData 持久化模型
+
+  6.4 动态公司存取款：
+    - GetAllCompanyDefinitions 合并固定+动态为统一列表
+    - BankMenu._companyList 替换所有 _config.Companies 引用
+    - GetMaxWithdrawal V3.3.1 资产池校验
+
+  6.5-6.7 燃料系统：
+    - FuelService 完整实现（114行，替换19行桩）
+    - FP 整数化：1标准作物=10FP，内部int，UI层/10
+    - 非对称规则：出货+10/+15/+20，购买/卖出-5
+    - 日消耗：DBase * statusCoefficient * 10
+    - 满足率判定：>150%(Prosperous) / 80-150%(Stable) / 30-80%(Hungry) / <30%(Dying)
+    - 状态系数：Prosperous×1.0, Stable/New×0.8, Hungry×0.5, Dying/Protection×0.3
+
+  6.8 资产池（V3.3.1）：
+    - effectiveLoanLimit = LoanLimit * statusMultiplier (Hungry×0.6, Dying×0.3)
+    - assetPool = max(0, effectiveLoanLimit - outstandingPrincipal)
+    - maxWithdrawal = min(depositBalance, max(0, assetPool))
+
+  11.3 遇到的 Bug 与修复
+
+  Bug 1 — 出货追踪不记录（ID 映射问题）：
+    原因：NormalizeItemId 使用 obj.ItemId（纯数字"192"），CropDataProvider 期望 "Potato"
+    修复：构建 35 条目 ItemIdToCode 字典，映射 QualifiedItemId -> CropCode
+
+  Bug 2 — 手机可出货/出售：
+    原因：Phone Type = "Basic"
+    修复：Type = "Quest" + DayEnding 双重保护移除出货箱中的手机
+
+  Bug 3 — 手机在背包整理时误判丢失：
+    原因：OnInventoryChanged 在菜单打开时检测手机
+    修复：添加 if (Game1.activeClickableMenu is not null) return;
+
+  Bug 4 — 燃料不持久化（最严重，2 轮修复）：
+    根因：服务内部 Load -> 修改 -> Save，然后调用方保存 stale 副本覆盖变更
+    第一轮：RecordShippingBinSale 修复 — 改为接收 BankAccountData 参数
+    第二轮：UpdateDailyInventory 修复 — 同上模式
+    教训：所有写入方法必须接收 BankAccountData 参数，由调用方统一 Load/Save
+
+  Bug 5 — BankMenu 操作后跳回第一个标签页：
+    原因：14 个回调创建 new BankMenu() 未传入当前标签索引
+    修复：BankMenu 构造函数增加 int selectedTab 参数，所有回调传入 _selectedCompanyIndex
+
+  11.4 设计偏差记录（实际实现 vs V3.1 设计）
+
+  - 保护期：14天 -> 3天（用户要求）
+  - 复利：默认 true -> false（用户要求）
+  - ICompanyManager：15+ 方法 -> 5 方法（YAGNI 精简）
+  - IFuelService：14 方法 -> 6 方法（精简，去掉未使用的需求计算/系数查询）
+  - IInterestCalculator：5 方法 -> 2 方法（YAGNI，去掉冷却/复利方法）
+  - 公司状态枚举：9 值 -> 8 值（Restructuring 合并为 Protection，Protected 改为 New）
+  - 无 FuelConstants/FuelCoefficients/StatusCoefficients 静态类（常量硬编码在 FuelService 中）
+  - 无 AssetPoolService 独立类（逻辑内联在 CompanyManager.GetMaxWithdrawal）
+  - ShipmentTrackingService 无接口（直接使用具体类）
+  - 生成候选无优先级排序（V3.2 补丁三设计的高价优先/多量优先未实现）
+  - 无生成失败反馈机制（V3.2 补丁三的电视/邮件/手机候补队列未实现）
+  - 状态判定使用比例制而非 V3.2 补丁一的绝对数量阶梯
+
+  11.5 测试覆盖
+
+  8 项测试全部通过（详见 Stage6测试流程.txt）：
+  1. [OK] 出货追踪记录
+  2. [OK] 动态公司生成
+  3. [OK] 出货累计天数
+  4. [OK] 公司总数限制
+  5. [OK] 咖啡豆排除
+  6. [OK] 隔代排斥（冷却）
+  7. [OK] 存款取款
+  8. [OK] 燃料变化 + 状态联动
+
+
+归档信息
+  文档版本：V3.1（架构重构报告 · Stage 15 完成 + V3.19-V3.20 Bug 修复：手机检测/本地化/公司名/复利冲突）
+  生成方式：AI Agent 全量扫描原项目 -> 接口提取 -> 分层重构 -> Stage 6-7 实现 -> V3.7-V3.9.1 修复 -> Stage 8 完整实现 -> Stage 9 完整实现
+  唯一事实源：重构后代码库（Stardew Valley bank mod refactored\）
+  构建状态：[OK] 通过（0 错误 1 警告 CS8602）
+  补丁状态：
+    [OK] V3.3 联机+燃料文档补丁（2026-05-02 写入架构总）
+    [OK] V3.3.1 公司状态操作限制重构文档补丁（2026-05-02 写入）
+    [OK] V3.3.2 公司倒闭存款返还机制文档补丁（2026-05-02 写入）
+    [OK] 勘误六 联机财产分配文档（2026-05-02 写入）
+    [OK] V3.6 Stage 6 实际实现记录文档补丁（2026-05-03 写入架构总）
+    [OK] V2.2 架构重构报告更新（2026-05-03）
+    [OK] V3.7 手动复利检测 + 利息硬顶 + 资产池修正 + UI 优化（2026-05-04）
+    [OK] V3.8 存款上限重构 + UI 本金化 + Morris 事件 + Stage 7 打压（2026-05-05）
+    [OK] V3.9 中文信件显示修复：移除 ChineseMailMenu，使用原版 LetterViewerMenu（2026-05-10）
+    [OK] V3.9.1 感谢信占位符→真实内容修复：反射注入 LetterViewerMenu.mailMessage（2026-05-10）
+    [OK] V3.19 手机丢失检测持久化 + 手机[LocalizedText]本地化 + 公司名OriginalName修复 + KnownTranslations补全（2026-05-29）
+    [OK] V3.20 c.Name中文名泄漏修复（LoadFromSave/ApplyRouteEffects不再修改c.Name）+ 复利/防复利冲突修复（倒计时后移+PreviousBaseAmount同步+滑动窗口重置）（2026-05-29）
+
+
+十二、V3.7 补丁记录（2026-05-04）
+
+  12.1 复利公式根因修复
+
+    问题：UseCompoundInterest=true 时利息按 DepositBalance（含累计利息）计算，系统自动利滚利。
+    修复：删除 UseCompoundInterest 分支，利息始终按 BaseAmount（纯本金）计算。
+    文件：Services/Core/CompanyManager.cs SettleDailyInterest
+
+  12.2 手动复利检测机制（patch!!!.txt）
+
+    问题：玩家取出利息再存回，本金呈日复利增长。
+    检测：7天滑动窗口 + 峰值突破算法。窗口内峰值突破 ≥3 次 → 存款利率 ×0.10，持续 7 天。
+    实现：
+    - CompanyAccount +8 字段（窗口/峰值/惩罚状态）
+    - InterestCalculationContext +IsPenaltyPeriod
+    - CompanyManager.DetectManualCompoundInterest() — 利息结算后执行
+    - FixedCompany + DynamicCompany 策略末端 ×0.10
+    - BankMenu.BuildContext 传入 IsPenaltyPeriod
+
+  12.3 利息硬顶：DepositBalance 不可超过 DepositLimit
+
+    三层防御：
+    1. interestBase = min(BaseAmount, DepositLimit)
+    2. 余额截断：overflow 被裁掉
+    3. AccInt 只记录实际入账部分（被裁部分不计入）
+    文件：CompanyManager.cs SettleDailyInterest
+
+  12.4 BaseAmount 负值安全重置
+
+    问题：取款钳 BaseAmount 到 0 但 AccInt 不减，AccInt > DepositBalance 时 BaseAmount 为负。
+    修复：若 BaseAmount ≤ 0 且 DepositBalance > 0，重置 AccInt=0, BaseAmount=DepositBalance。
+    文件：CompanyManager.cs SettleDailyInterest
+
+  12.5 资产池规则修正
+
+    问题：固定公司也有资产池概念；动态公司非濒危状态也受限。
+    修复：
+    - 固定公司：取款上限 = DepositBalance（无资产池）
+    - 动态公司仅 Hungry(×0.6)/Dying(×0.3) 有资产池限制
+    - Stable/Prosperous/New/Protection：无限制
+    文件：CompanyManager.cs GetMaxWithdrawal
+
+  12.6 NumberInputMenu 全部按钮激活
+
+    NumberInputMenu 已有 FormatWithCommas（逗号格式化）、首数字 0 无效、FillMax（全部按钮）。
+    此前未传 maxAmount/allButtonLabel 参数，功能不可见。现在：
+    - 存入 → 全部存入按钮，填入 min(持有金币, 存款额度剩余)
+    - 取出 → 全部取出按钮，填入当前最大可取金额
+    点击只填输入框，不直接执行。
+    文件：BankMenu.cs receiveLeftClick
+
+  12.7 修改文件清单（V3.7）
+
+  | 文件 | 变更 |
+  |------|------|
+  | Data/BankAccountData.cs | 删 UseCompoundInterest 依赖；CompanyAccount +8 V3.7 字段 |
+  | Domain/InterestCalculationContext.cs | +IsPenaltyPeriod |
+  | Services/Core/CompanyManager.cs | 复利修正 + 硬顶 + 重置 + 检测 + 资产池修正 |
+  | Services/Core/Interest/FixedCompanyInterestStrategy.cs | 存款利率 ×0.10 惩罚 |
+  | Services/Core/Interest/DynamicCompanyInterestStrategy.cs | 存款利率 ×0.10 惩罚 |
+  | UI/BankMenu.cs | BuildContext +IsPenaltyPeriod；存入/取出 +maxAmount+allButtonLabel |
+
+  12.8 已知待处理（Stage 7）
+
+  - Stage 7 连续售卖加成 / 停售衰减 / 竞争对手打压 未完成完整测试
+  - 公司状态阈值需对照 value3.txt 确认
+  - Joja 杂货店不收农作物（游戏本身限制）
+
+
+十三、V3.8 补丁记录（2026-05-05）：存款上限重构 + UI 本金化 + Morris 事件 + Stage 7
+
+  13.1 DepositLoanCoefficient 统一存款上限公式
+
+    问题：存款上限与贷款上限之前分散为 6 个独立配置项（皮埃尔/Joja/低R/中R/高R 各一个
+    DepositLimit 和 LoanLimit），数值之间没有逻辑关联，修改时容易产生矛盾配置。
+
+    修复：新增统一配置项 DepositLoanCoefficient（默认值 5000），公式化计算：
+      DepositLimit = cropCost × DepositLoanCoefficient
+      贷款上限 = DepositLimit × 状态乘数（繁荣/稳定 ×1.0, 饥饿 ×0.6, 濒死 ×0.3）
+
+    这使存款上限自动锚定作物经济价值，高价值作物（杨桃、上古）自动获得高存款上限，
+    低价值作物（防风草、土豆）存款上限相应较低。玩家修改一个系数即可全局缩放。
+
+    删除的旧配置项（6 个）：
+      Pierre.DepositLimit, Pierre.LoanLimit, Joja.DepositLimit, Joja.LoanLimit,
+      LowCropLoanLimit, MediumCropLoanLimit, HighCropLoanLimit
+
+    GMCM 变更：
+      - 移除 6 个旧滑块
+      - 新增 "存贷统一系数" 滑块（1000 ~ 20000，步长 100）
+      - 新增 "贷款上限乘数" 滑块（饥饿 0.6 / 濒死 0.3，繁荣/稳定固定 ×1.0）
+      - tooltip 说明公式联动逻辑
+
+    文件：ModConfig.cs, CompanyManager.cs (GetMaxWithdrawal), BankMod.cs (GMCM)
+
+  13.2 存款上限 = 本金上限（利息不可突破）
+
+    核心原则：存款上限是"本金上限"，而非"总余额上限"。累计利息可以让总余额超过
+    存款上限，但玩家不能再主动存入超过上限的本金。
+
+    规则细化：
+    - 计息基数：interestBase = min(BaseAmount, DepositLimit)
+    - 利息入账：若 DepositBalance + interest > DepositLimit，不截断利息（利息不受限）
+    - 存款操作：maxDepositAmount = max(0, DepositLimit - BaseAmount)（仅本金受限）
+    - BaseAmount 永远不会超过 DepositLimit
+
+    这修正了 V3.7 中"利息硬顶"过度激进的问题——之前利息也被截断导致玩家在
+    存款满额后完全没有利息增长。新规则下利息正常累积，只是不能主动存入更多本金。
+
+    文件：CompanyManager.cs (SettleDailyInterest, 存款按钮限制)
+
+  13.3 AccInt 安全重置（BaseAmount ≤ 0 场景）
+
+    问题：取款钳 BaseAmount 到 0 但 AccInt 不减，AccInt > DepositBalance 时
+    BaseAmount 计算为负值 → 钳到 0 → 利息为 0 → 死锁。
+
+    修复：每日 SettleDailyInterest 中检测：
+      if (BaseAmount ≤ 0 && DepositBalance > 0)
+        → AccInt = 0, BaseAmount = DepositBalance, PreviousBaseAmount = BaseAmount
+
+    效果：重置后公司回到干净状态，后续利息正常按本金计算。
+
+    文件：CompanyManager.cs SettleDailyInterest
+
+  13.4 UI 优化：本金显示 + 基础利率悬浮
+
+    13.4.1 新增"本金"行
+
+    BankMenu 存款区域新增一行：
+      本金：XXX,XXX g
+
+    显示当前公司 BaseAmount，让玩家清晰区分"本金"和"总余额（含利息）"。
+    布局：金额上方是总余额，下方新增本金行（小字号）。
+
+    13.4.2 基础利率移入悬浮提示
+
+    此前 BankMenu 各公司标签页固定显示基础利率（如"基础 2.5%"），占用空间。
+    现在：
+    - 移除主界面的基础利率行
+    - 在"有效利率：X.XX%"标签上添加 hover tooltip：
+      "基础利率：X.XX%（公司/作物原始利率）
+       天气修正：+/-X.XX%
+       运气修正：×X.XX
+       连续售卖加成：+X.XX%
+       ..."
+
+    玩家鼠标悬停在有效利率上即可看到完整的利率分解链条。
+
+    文件：BankMenu.cs (draw 方法 + tooltip 逻辑)
+
+  13.5 GMCM tooltip 全面更新
+
+    所有 GMCM 配置项的 tooltip 从简单一句话扩展为包含：
+    - 参数作用的简要说明
+    - 公式/联动关系
+    - 推荐值与允许范围
+    - 与其他参数的依赖关系
+
+    重点更新的 tooltip：
+    - DepositLoanCoefficient："存款上限 = 作物成本 × 系数。贷款上限在此基础上乘状态乘数"
+    - 利率浮动参数：逐一说明加成/衰减公式与上下限
+    - 打压参数：说明 JojaSupplyMenu 卖出检测逻辑
+
+    文件：BankMod.cs (RegisterModConfig 中所有 AddNumberOption 的 tooltip 参数)
+
+  13.6 Morris 事件过场动画（JojaMart 供应商样品周转箱）
+
+    13.6.1 功能概述
+
+    在 JojaMart 内 (26, 2) 位置放置一个隐式交互标记（供应商样品周转箱）。
+    玩家右键点击 → 首次触发 Morris 过场动画 → 动画结束自动打开 JojaSupplyMenu。
+    之后再次点击直接进入 JojaSupplyMenu（跳过动画）。
+
+    13.6.2 事件脚本
+
+    事件 ID：BankMod.MorrisSampleBasket
+    注册位置：Data/Events/JojaMart（通过 AssetRequested 事件注入）
+    备用文件：Morrio event.txt（Content Patcher 格式，供独立打包使用）
+
+    事件流程：
+    1. 玩家 (26, 2) 面向右，Morris (23, 2) 面向右
+    2. 镜头移动到 (24, 0)，玩家跳跃表示惊讶
+    3. 玩家面向下 (faceDirection 3)
+    4. Morris 对话×6 段：
+       - 警告不要碰周转箱（$2 语气）
+       - 吐槽供应商品控问题（emote 28 惊讶）
+       - 认出玩家是%farm农场新农户（$3 语气）
+       - 商业提案：稳定供应→Joja 内部折扣 10%+（emote 32 开心）
+       - 供应链合规+双赢论述
+       - 离开看销售报告
+    5. 事件结束 → 自动打开 JojaSupplyMenu
+
+    13.6.3 Morris 隐藏/恢复（关键实现）
+
+    问题：JojaMart 地图上已有一个 Morris NPC，事件系统不会自动隐藏他，
+    导致过场动画中出现两个 Morris。
+
+    解决：使用 SMAPI 反射操作私有字段 isInvisible
+      - 事件前：Helper.Reflection.GetField<bool>(morris, "isInvisible").SetValue(true)
+      - 事件后：Helper.Reflection.GetField<bool>(morris, "isInvisible").SetValue(false)
+
+    注意：公共属性 IsInvisible 的 setter 不生效，必须通过反射操作私有字段
+    isInvisible（camelCase）。通过 Game1.currentLocation.characters 而非
+    Game1.getCharacterFromName 查找 Morris（后者在特定条件下返回 null）。
+
+    13.6.4 标记渲染
+
+    OnRenderedWorld 中在标记位置绘制脉动金色感叹号（使用 Game1.mouseCursors
+    纹理，带正弦弹跳动画和透明度脉冲），引导玩家首次发现交互点。
+
+    事件已看过标记：_morrisEventSeen 写入 saveData，下次加载时恢复。
+
+    文件：BankMod.cs (+80 行), Morrio event.txt
+
+  13.7 JojaSupplyMenu 售卖流程（Stage 7.3 入口）
+
+    13.7.1 功能概述
+
+    自定义 IClickableMenu，允许玩家在 JojaMart 向 Morris 出售农作物。
+    卖出作物触发：竞争对手打压（ApplySuppression）+ 燃料扣除（RecordExternalSale）。
+
+    13.7.2 界面结构
+
+    - 顶部标题："Joja 供应商周转箱"
+    - 中部背包物品网格（与出货箱类似的 icon 选择逻辑）
+    - 仅显示可打压的作物（有对应动态公司的作物）
+    - 选中物品高亮 + 数量显示
+    - 底部：出售按钮 + 关闭按钮
+
+    13.7.3 ProcessSale 逻辑
+
+    1. 从玩家背包移除物品
+    2. 按物品售价 × 数量给玩家金币
+    3. CompanyManager.ApplySuppression(account, cropCode, quantity)
+       → 对同作物动态公司施加打压层数
+    4. FuelService.RecordExternalSale(cropCode, quantity)
+       → -5 FP/个
+
+    文件：UI/JojaSupplyMenu.cs (~180 行)
+
+  13.8 Stage 7 竞争对手打压机制
+
+    13.8.1 商店售卖检测
+
+    通过 OnMenuChanged 事件检测玩家在 ShopMenu（皮埃尔/Joja）中的售卖行为：
+    1. 商店打开时：快照当前背包物品及数量（_preShopInventory）
+    2. 商店关闭时：diff 背包前后变化，物品减少 = 已售出
+    3. 对每个售出的作物：Mapping QualifiedItemId → CropCode
+    4. 调用 CompanyManager.ApplySuppression + FuelService.RecordExternalSale
+
+    文件：BankMod.cs OnMenuChanged (+45 行)
+
+    13.8.2 CropSuppressionData 模型
+
+    新增数据模型（BankAccountData 内嵌类）：
+    | 字段 | 类型 | 说明 |
+    |------|------|------|
+    | CropCode | string | 被打压的作物代码 |
+    | Stacks | int | 当前打压层数（≤ SuppressMaxStacks） |
+    | RemainingDays | int | 每层打压剩余天数 |
+
+    持久化在 BankAccountData.CropSuppressions : List<CropSuppressionData>
+
+    文件：Data/BankAccountData.cs
+
+    13.8.3 ApplySuppression（CompanyManager）
+
+    - 售卖数量 ≥ 50 → +3 层打压
+    - 售卖数量 ≥ 20 → +2 层打压
+    - 售卖数量 < 20 → +1 层打压
+    - 层数上限 = SuppressMaxStacks（默认 3）
+    - 每层持续天数 = SuppressEffectDurationDays（默认 5 天）
+    - 同作物重复打压刷新 RemainingDays
+
+    文件：CompanyManager.cs ApplySuppression
+
+    13.8.4 每日打压衰减（TickSuppression）
+
+    OnDayStarted 第 4.5 步：
+    - 所有 CropSuppressions 的 RemainingDays 逐日递减
+    - RemainingDays 归零 → Stacks -1
+    - Stacks 归零 → 移除该条目
+
+    文件：CompanyManager.cs TickSuppression
+
+    13.8.5 打压对利率的影响
+
+    在 DynamicCompanyInterestStrategy 中：
+    - 打压层数 > 0 → 利率 -= min(Stacks × |SuppressMaxDropPerDay|, |SuppressMaxDropPerDay| × SuppressMaxStacks)
+    - SuppressMaxDropPerDay（默认 -0.02，即每层 -2%/天）
+    - 仅在动态公司利率计算中生效，固定公司不受影响
+
+    文件：DynamicCompanyInterestStrategy.cs
+
+  13.9 Stage 7 连续售卖加成与停售衰减
+
+    13.9.1 连续售卖加成（7.1）
+
+    利息计算上下文新增 ConsecutiveSellDays 字段。
+    - 连续售卖 > 0 天：存款利率 + min(天数 × 每层加成, 加成上限)
+    - ConsecutiveSellDepositBonusPerDay（默认 +0.5%/天）
+    - ConsecutiveSellDepositBonusCap（默认 +5.0%）
+    - 贷款同理使用 ConsecutiveSellLoanBonusPerDay / ConsecutiveSellLoanBonusCap（默认 +1.0%/天, +10.0%）
+
+    13.9.2 停售衰减（7.2）
+
+    - 连续售卖 = 0：存款利率 -= SellDecayDepositPerDay（默认 -0.5%/天）
+    - 贷款：利率 -= SellDecayLoanPerDay（默认 -1.0%/天）
+    - 衰减无下限（可持续变负，直到受 DepositRateFloor 约束）
+
+    13.9.3 计算顺序（7.4）
+
+    固定顺序确保所有因子可预测：
+    base → +consecutive/decay → -suppression → ×luck → +weather → clamp → ×penalty(0.10)
+
+    文件：FixedCompanyInterestStrategy.cs, DynamicCompanyInterestStrategy.cs, BankMenu.cs (BuildContext)
+
+  13.10 V3.8 修改文件清单
+
+  | 文件 | 变更 |
+  |------|------|
+  | Data/ModConfig.cs | 新增 DepositLoanCoefficient；删除 6 个旧 Deposit/LoanLimit 字段 |
+  | Data/BankAccountData.cs | 新增 CropSuppressionData 内嵌类 + CropSuppressions 列表 |
+  | Domain/InterestCalculationContext.cs | +ConsecutiveSellDays, +SuppressionStacks, +SuppressionRemainingDays |
+  | Services/Abstractions/ICompanyManager.cs | +ApplySuppression(BankAccountData, string, int) |
+  | Services/Core/CompanyManager.cs | 存款上限公式化；ApplySuppression；TickSuppression；GetMaxWithdrawal 状态乘数 |
+  | Services/Core/Interest/FixedCompanyInterestStrategy.cs | 连续售卖加成 + 停售衰减 |
+  | Services/Core/Interest/DynamicCompanyInterestStrategy.cs | 连续售卖加成 + 停售衰减 + 打压影响 |
+  | Services/Core/ShipmentTrackingService.cs | +NormalizeItemId(string qualifiedItemId) 公开方法 |
+  | BankMod.cs | Morris 事件（标记+脚本+隐藏/恢复+渲染）；商店售卖检测（OnMenuChanged diff）；GMCM tooltip 更新 |
+  | UI/BankMenu.cs | 本金显示；基础利率 hover tooltip；BuildContext 传递 Stage 7 字段 |
+  | UI/JojaSupplyMenu.cs | [新增] Joja 供应商周转箱售卖界面（~180 行） |
+  | Morrio event.txt | [新增] Content Patcher 格式 Morris 事件备用文件 |
+
+  13.11 已知待处理
+
+  - Stage 7 打压对反方向公司（Pierre/Joja）的加成 boost 未实现
+  - 连续售卖天数在 ShipmentTrackingService 中的数据流完整性待验证
+  - 季节过渡状态机仍未接入实际管线（架构设计中已有但代码未激活）
+  - 多人模式下 Stage 7 打压同步未测试
+
+  13.12 V3.8 补充（2026-05-07）：燃料=0 公司立即倒闭
+
+    问题：V3.1 设计中濒死期有 7 天重组期（Restructuring 状态），但代码中从未实现
+    Restructuring 状态。公司状态枚举只有 8 个值（不含 Restructuring），导致濒死公司
+    无法自动消亡。
+
+    修正：删除濒死重组期设计。燃料耗尽（FuelStock ≤ 0 且状态为 Dying）时公司立即倒闭：
+    - 状态直接变为 Bankrupt
+    - 存款清零（BaseAmount = 0, AccumulatedInterest = 0, DepositBalance = 0）
+    - 记录 BankruptcySeason 和 BankruptcyYear 用于冷却判定
+    - 删除 ConsecutiveDyingDays 字段（不再需要濒死天数计数）
+    - 删除 CompanyDeathDyingDays / BankruptcyDyingDaysThreshold 常量
+
+    代码位置：CompanyManager.cs UpdateCompanyStatuses()
+    文件变更：DynamicCompanyData.cs（删除 ConsecutiveDyingDays）
+
+  13.13 V3.8 补充（2026-05-07）：倒闭冷却逻辑修正
+
+    问题：架构总 3.5 节描述为"下一完整季节无法重新生成"，即当前季节剩余天数 +
+    下一完整季节均封锁。用户确认实际需求为"每一季节该公司只能出现一次"。
+
+    修正：IsCropOnBankruptcyCooldown 简化为仅封锁当前季节实例：
+    - 同一季节 + 同一年份 → 封锁
+    - 跨季自动解除（春季倒闭 → 夏季即可重新生成）
+    - 次年同季节 → 不封锁（新季节实例）
+
+    代码位置：CompanyManager.cs IsCropOnBankruptcyCooldown()
+    逻辑：return Game1.currentSeason == BankruptcySeason && Game1.year == BankruptcyYear
+
+  13.14 V3.8 补充（2026-05-07）：燃料显示颜色修正
+
+    问题：BankMenu 中燃料状态使用 DarkRed/DarkOrange/DarkGreen/DimGray，在深色
+    背景上难以辨认。
+
+    修正：亮色系替换
+    - 状态颜色：DarkCyan→Cyan, DarkGreen→LimeGreen, DarkOrange→Orange, DarkRed→Red
+    - 燃料比例颜色：DarkGreen→LimeGreen, DarkOrange→Orange, DarkRed→Red
+    - 日消耗文字：DimGray→Gray
+
+    代码位置：UI/BankMenu.cs
+
+  13.15 修改文件清单（2026-05-07 补充）
+
+    | Data/DynamicCompanyData.cs | 删除 ConsecutiveDyingDays 字段 |
+    | Services/Core/CompanyManager.cs | UpdateCompanyStatuses 燃料=0立即倒闭；IsCropOnBankruptcyCooldown 简化为当前季节封锁 |
+    | UI/BankMenu.cs | 燃料状态/比例/消耗颜色亮色化 |
+    | 架构总.txt | 3.5节冷却描述修正；10.3参数表冷却时间修正 |
+    | 架构重构报告 V2.0.txt | 版本更新至V2.5；新增13.12-13.15 V3.8补充记录 |
+
+
+十四、V3.9 补丁记录（2026-05-10）：中文信件显示修复（移除 ChineseMailMenu）
+
+  14.1 问题背景
+
+    Pierre/Morris 感谢信需要显示中文内容，但原版 LetterViewerMenu 使用 SpriteFont
+    渲染文字，无法显示中文字符。此前通过 MenuChanged 事件拦截 LetterViewerMenu，
+    替换为自定义 ChineseMailMenu 来渲染中文。
+
+  14.2 三次失败尝试
+
+    尝试一：Game1.drawDialogueBox 绘制背景
+      - 结果：显示为对话框气泡样式（棕色圆角面板），非信件羊皮纸样式
+      - 原因：drawDialogueBox 是 NPC 对话框的绘制方法，不是信件背景
+
+    尝试二：b.Draw(letterBG) 直接绘制 LooseSprites\letterBG 纹理
+      - 结果：纹理被拉伸/变形，尺寸不匹配
+      - 原因：letterBG 原始尺寸 320×180，需要正确缩放到信件窗口尺寸
+
+    尝试三：drawTextureBox(letterBG, 9-slice) 绘制
+      - 结果：九宫格拉伸导致信纸边缘和内容区域变形，仍与原版信件格式不一致
+      - 原因：drawTextureBox 的九宫格算法不适合 letterBG 这种全幅纹理
+
+    三次尝试均无法完美还原原版 LetterViewerMenu 的信件外观。
+
+  14.3 最终方案：移除 ChineseMailMenu，使用原版 LetterViewerMenu
+
+    关键发现：SMAPI 中文版已将 Game1.smallFont 替换为支持中文的字体。
+    原版 LetterViewerMenu 使用 Game1.smallFont 渲染信件文字，因此中文内容可以
+    直接在原版 LetterViewerMenu 中正确显示，无需自定义菜单。
+
+    修改：
+    - 移除 MenuChanged 中 LetterViewerMenu → ChineseMailMenu 的替换逻辑
+    - Data/mail 中直接注册中文内容（此前已实现，通过 NormalizeMailText 处理中文标点）
+    - ChineseMailMenu.cs 保留但不再被引用，可在后续版本中删除
+
+    优势：
+    - 100% 匹配原版信件格式（羊皮纸背景、蜡封、布局、翻页等）
+    - 无需维护自定义菜单的绘制代码
+    - Joja 信件（mailId 含 "Morris"）自动获得原版深色背景
+    - 原版信件的所有交互（附件领取、多页翻页等）自动可用
+
+  14.4 同时修复的信件投递问题（V3.9 前置修复）
+
+    问题一：信封不出现
+      - 原因：Pierre/Morris 信件投递逻辑放在农场进入检测块内，玩家在农场醒来时
+        _lastLocationName 已为 "Farm"，不会触发 "进入农场" 条件
+      - 修复：将投递逻辑移到独立的 pending 标志检查块
+
+    问题二：信封出现但无信件内容
+      - 原因：Data/mail 中 BankMod.MorrisThanks 条件注册，仅当
+        MorrisThanksLetterText 非空时才注册，但 AssetRequested 触发时文本可能为空
+      - 修复：始终注册占位条目，有真实内容时覆盖占位
+
+  14.5 修改文件清单
+
+    | 文件 | 变更 |
+    |------|------|
+    | BankMod.cs | 移除 LetterViewerMenu → ChineseMailMenu 替换逻辑；更新注释 |
+    | UI/ChineseMailMenu.cs | 保留但不再被引用 |
+
+  14.6 构建状态
+
+    [OK] 通过（0 错误 1 警告 CS8602）
+
+
+十五、V3.9.1 补丁记录（2026-05-10）：感谢信占位符→真实内容 + 反射注入
+
+  15.1 问题背景
+
+    Pierre/Morris 感谢信在首次触发时显示占位符文本（"占位^Morris信件"/"占位^Pierre信件"），
+    而非动态生成的中文信件内容。退出存档重新进入后可正常显示。
+
+    根因：Data/mail 资源的 OnAssetRequested 仅在游戏首次加载/缓存时触发一次。
+    信件占位条目在游戏启动时注册（此时 TriggerThanksLetter 尚未执行，信件文本为 null），
+    后续 TriggerThanksLetter 写入的真实文本不会自动更新已缓存的 Data/mail 副本。
+    Helper.GameContent.InvalidateCache("Data/mail") 不会可靠地导致 OnAssetRequested 重新触发。
+    Helper.GameContent.Load<Dictionary<string,string>>("Data/mail") 返回的是临时副本而非缓存引用。
+
+  15.2 三个连锁 Bug 修复
+
+    Bug 1 — mailReceived 缺失（信封不出现 / JojaSupplyMenu 无法触发信件）
+      原因：GivePhoneToPlayer() 未将 "BankMod_Letter" 添加到 mailReceived，
+            导致 JojaSupplyMenu 的 hasBankLetter 检查失败
+      修复：GivePhoneToPlayer() 中添加
+            Game1.player.mailReceived.Add("BankMod_Letter")
+            + _services.HasReceivedPhoneInSession = true
+      代码位置：BankMod.cs GivePhoneToPlayer()
+
+    Bug 2 — Save 覆盖（TriggerThanksLetter 内部 Load/Save 被调用方覆盖）
+      原因：TriggerThanksLetter 内部 Load() → 修改 → Save()，但调用方也 Save()
+            了旧的 account 对象，覆盖了信件文本
+      修复：TriggerThanksLetter 改为接收 BankAccountData 参数，移除内部 Load/Save，
+            返回 bool 表示是否成功触发
+      代码位置：ModServices.cs TriggerThanksLetter 签名变更
+                BankMod.cs / JojaSupplyMenu.cs 调用处同步更新
+
+    Bug 3 — Data/mail 缓存不刷新（核心问题，3 轮尝试修复）
+      尝试一：InvalidateCache — 无效，不保证 OnAssetRequested 重新触发
+      尝试二：GameContent.Load 修改字典 — 无效，Load 返回临时副本
+      最终方案：反射注入 LetterViewerMenu.mailMessage（见 15.3）
+
+  15.3 反射注入：LetterViewerMenu.mailMessage
+
+    ⚠️【反射标记 — 游戏更新时需检查此处的 API 兼容性】⚠️
+
+    目标类：  StardewValley.Menus.LetterViewerMenu
+    目标字段：mailMessage（private List<string>）
+    反射方式：System.Reflection（非 SMAPI ReflectionHelper）
+    用途：    在信件打开时将 Data/mail 缓存中的占位内容替换为真实信件文本
+
+    代码位置：BankMod.cs MenuChanged 事件处理
+
+    反射代码：
+    ┌──────────────────────────────────────────────────────────────────────┐
+    │ var mailMsgField = typeof(LetterViewerMenu).GetField("mailMessage", │
+    │     BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public); │
+    │ if (mailMsgField != null)                                           │
+    │ {                                                                   │
+    │     string normalized = NormalizeMailText(realText);                │
+    │     string[] pages = normalized.Split(new[] { "^^^" },             │
+    │         StringSplitOptions.RemoveEmptyEntries);                     │
+    │     mailMsgField.SetValue(lvm, new List<string>(pages));            │
+    │ }                                                                   │
+    └──────────────────────────────────────────────────────────────────────┘
+
+    触发条件：MenuChanged 检测到 LetterViewerMenu 打开，
+              且 mailTitle 为 "BankMod.PierreThanks" 或 "BankMod.MorrisThanks"
+
+    游戏更新检查清单：
+    - LetterViewerMenu 类是否重命名或移除
+    - mailMessage 字段是否存在、类型是否仍为 List<string>
+    - mailMessage 的访问级别是否改变（private → 其他）
+    - LetterViewerMenu 构造函数中 mailTitle 的赋值方式是否变化
+    - mailMessage 的元素含义是否变化（每元素一页 vs 每元素一段落）
+
+  15.4 信件文本格式约定
+
+    星露谷 Data/mail 信件文本的格式约定：
+    - "^"  = 换行符（LetterViewerMenu 渲染引擎处理）
+    - "^^" = 空行（两个连续换行）
+    - "^^^" = 自定义分页标记（BankMod 约定，反射注入时按此分页）
+
+    当前信件结构（Pierre 信示例）：
+      第 1 页：标题 + 发件人 + 主题 + 问候 + 三段正文（至"续命"）
+      第 2 页：结尾三段 + 签名
+
+    当前信件结构（Morris 信示例）：
+      第 1 页：标题 + 发件人 + 主题 + 问候 + 两段正文（至"枯竭"）
+      第 2 页：结尾三段 + 签名
+
+  15.5 NormalizeMailText 函数
+
+    代码位置：BankMod.cs NormalizeMailText (private static)
+    公开包装：BankMod.cs NormalizeMailTextPublic (public static)
+
+    当前功能：仅做中文标点替换（：，。！？（）——），保留 ^ 原样交由游戏渲染。
+
+    注意：此前版本曾将 ^ 替换为 \n，导致信件无换行。
+    当前版本保留 ^ 原样，因为 LetterViewerMenu 渲染引擎会自行处理 ^ 换行。
+
+  15.6 ModServices.TriggerThanksLetter 变更
+
+    旧签名：void TriggerThanksLetter(string letterType, ...)
+    新签名：bool TriggerThanksLetter(BankAccountData account, string letterType, ...)
+
+    变更要点：
+    - 接收外部传入的 BankAccountData，不再内部 Load/Save
+    - 返回 bool：true = 信件已触发，false = 条件不满足
+    - PendingPierreMail / PendingMorrisMail 仍在此方法内设置
+    - 信件文本使用 ^ 换行、^^ 空行、^^^ 分页标记
+
+    新增属性：ModServices.HasReceivedPhoneInSession
+    用途：JojaSupplyMenu 判断玩家是否已收到银行手机，避免 mailReceived 尚未写入时
+          的时序问题
+
+  15.7 修改文件清单
+
+    | 文件 | 变更 |
+    |------|------|
+    | BankMod.cs | 反射注入 LetterViewerMenu.mailMessage；GivePhoneToPlayer +mailReceived |
+    |            | +HasReceivedPhoneInSession；NormalizeMailText 移除 ^→\n 替换 |
+    |            | +NormalizeMailTextPublic 公开包装；UpdateMailCache（已废弃，保留） |
+    | Services/Core/ModServices.cs | TriggerThanksLetter 签名改为接收 account 参数 |
+    |            | +HasReceivedPhoneInSession 属性；信件模板使用 ^/^^/^^^ 格式 |
+    | UI/JojaSupplyMenu.cs | TriggerThanksLetter 调用处更新；hasBankLetter 检查增加 HasReceivedPhoneInSession |
+    | UI/ChineseMailMenu.cs | 无变更，仍保留但未引用 |
+
+  15.8 构建状态
+
+    [OK] 通过（0 错误 1 警告 CS8602）
+
+
+十六、Stage 8 执行报告（2026-05-14）：利息欠债、本金欠债与破产保护
+
+  16.1 实现概况
+
+  开始日期：2026-05-13
+  完成日期：2026-05-14
+  修改/新增文件：11 个
+  构建状态：[OK] 0 Error(s), 1 Warning(s) CS8602
+  部署位置：D:\steam\steamapps\common\Stardew Valley\Mods\BankMod\
+
+  16.2 实现内容
+
+  8.1 动态公司每日现金扣息：
+    - LoanService.DailyTick 中 isDynamic 分支：每日从玩家现金扣除贷款日息
+    - 现金不足 → OverdueInterest 累积 → IsInInterestDebt = true
+    - 单利/复利模式通过 UseCompoundInterest 控制
+
+  8.2 利息欠债状态：
+    - LoanRecord +OverdueInterest / +IsInInterestDebt 字段
+    - 单利：逾期利息单独记录，不影响本金计息
+    - 复利：逾期利息滚入本金生息
+    - 欠债期间不限制借款/取款
+
+  8.3 本金欠债与强制划扣：
+    - 到期现金不足 → IsInDefault + DefaultDaysRemaining 宽限期
+    - 宽限期内罚息利率（PenaltyInterestRate）
+    - 宽限期结束 → CollectFundsOrdered（低利率存款优先）
+    - 强制划扣仍不够 → 触发破产冻结
+    - Bug 修复：逾期部分还款不再重置到期日或清除逾期状态
+
+  8.4 破产保护（与实际设计偏差最大）：
+    - 触发条件：改为仅在强制划扣失败时（现金+全部存款<应还），非每日检测
+    - 冻结贷款：IsFrozen = true，跳过 DailyTick（不计息、不到期）
+    - 破产影响（最终版）：
+      - 禁止借款（LoanService.IssueLoan 拦截）
+      - 收入扣款：双层机制——过夜出货(DayEnding快照)+日间收入(UpdateTicked逐帧)
+      - 取款/存款均不受限
+      - 存款利息照常计算（SettleDailyInterest 不拦截）
+      - 右下角常驻标语："星露谷永远有下一个春天…"（RenderedHud）
+    - 退出：冻结贷款还清 → 检查无剩余冻结 → 解除破产 → "恭喜，享受你的春天吧"
+
+  8.5 贷款独立化（超出 demand 的额外改动）：
+    - IssueLoan 取消加贷合并，每笔借款独立 LoanRecord
+    - 同日同公司同周期自动合并（利率加权平均）
+    - UI 新增"明细"/"摘要"切换按钮
+    - 明细视图：滚动列表（最多显示2条 + 滚动条）+ 逐条还款按钮
+    - 借款/还款界面新增一键最大按钮
+
+  8.6 公司出售计数归零：
+    - 公司倒闭时清零 CropShipmentData（CumulativeSellCount/ConsecutiveSellDays/LastSellDay）
+    - 防止跨季立即重生
+
+  8.7 到期/强制扣款通知：
+    - 到期自动还款 → "贷款到期：XX公司 已自动还款 XXX g"
+    - 强制划扣 → "强制划扣：XX公司 贷款已从存款扣除 XXX g，剩余…"
+    - 强制划扣结清 → "强制划扣：XX公司 贷款已全部清偿"
+
+  16.3 遇到的 Bug 与修复
+
+  Bug 1 — 动态公司贷款 DailyTick 被跳过：
+    原因：config.Companies 不含动态公司，companyDef 为 null → continue
+    修复：查 account.DynamicCompanies 构造临时 CompanyDefinition
+
+  Bug 2 — 破产判定把所有未到期贷款也算入：
+    原因：CheckBankruptcy 用 account.Loans.Sum(l => l.Principal + ...) 统计全部贷款
+    修复：只统计 IsInDefault 或 IsInInterestDebt 的贷款；后改为 LoanService 强制划扣时触发
+
+  Bug 3 — 还款双重扣钱：
+    原因：BankMod 手动 Game1.player.Money -= deduct，ApplyShippingIncomeDeduction 内部又扣一次
+    修复：去掉外层手动减钱
+
+  Bug 4 — ApplyShippingIncomeDeduction 参数二次乘比率：
+    原因：调用方已 ×50% 再传入，方法内部又 ×50% → 实际只扣 25%
+    修复：传入总收入(gross)，方法内部一次 ×50%
+
+  Bug 5 — 逾期部分还息就重置到期日：
+    原因：RepayLoan 的 else 分支对逾期贷款也重置 DueDay 并清除 IsInDefault
+    修复：逾期/冻结状态不重置到期日，只有未逾期提前还款才续期
+
+  Bug 6 — 公司倒闭后跨季复活：
+    原因：CropShipmentData.CumulativeSellCount 未在倒闭时清零，换季冷却失效后立即重新达标
+    修复：倒闭时清零 CumulativeSellCount / ConsecutiveSellDays / LastSellDay
+
+  Bug 7 — 燃料满足率 DBase vs Smax 分母混淆：
+    原因：状态判定用 FuelStock/(DBase×10)（够烧天数），UI 显示用 FuelStock/(Smax×10)（满仓百分比），
+          93% Smax 时 DBase 分母算出来远超 150% → 误判繁荣
+    修复：统一为 Smax 分母，阈值保持不变（>150% 繁荣、80-150% 稳定、30-80% 饥饿、<30% 濒死）
+
+  Bug 8 — 新公司燃料不含已出售作物：
+    原因：GenerateDynamicCompany 初始燃料只有 Smax×0.3×10
+    修复：加 CumulativeSellCount × 10，上限 Smax×200%×10
+
+  Bug 9 — 存款累计利息在 BaseAmount>0 但 DepositBalance≤AccInt 时不重算：
+    原因：V3.7 重算条件仅 BaseAmount≤0
+    修复：新增 DepositBalance≤AccumulatedInterest 触发条件
+
+  Bug 10 — 破产标语不即时消失：
+    原因：ProcessRepay 后标志位虽已更新，但 BankMenu 用旧 _account 引用
+    修复：SaveAccount 后 Load 新鲜数据再创建 BankMenu，无条件强制清零标志位
+
+  16.4 设计偏差记录（实际实现 vs demand.txt）
+
+  - 破产触发：每日检测 → 强制划扣失败时触发（更精确，避免误判）
+  - 破产后存款利息：冻结 → 正常计算（用户反馈修正）
+  - 破产后取款：禁止 → 允许（用户反馈修正）
+  - 逾期后借款：禁止 → 允许（用户反馈修正，只有破产禁借款）
+  - 破产后贷款利息清零：不清零（用户反馈修正，保留历史利息）
+  - 每日破产检测：BankruptcyHandler.CheckBankruptcy → LoanService 内部触发
+  - 冻结贷款：新增 IsFrozen 字段，DailyTick 跳过，不计息不到期
+  - 贷款独立化：超出 demand 的用户需求，每笔独立 + 明细视图 + 同日合并
+  - 破产标语：RenderedHud 常驻右下角，超出 demand 的用户需求
+  - 偿债优先级：破产债务 > 剩余天数最少 > 本金最高 > 作物ID，超出 demand 的用户需求
+
+  16.5 修改文件清单
+
+  | 文件 | 变更 |
+  |------|------|
+  | Data/BankAccountData.cs | LoanRecord +OverdueInterest +IsInInterestDebt +IsFrozen |
+  |                         | BankAccountData +IsInBankruptcy +BankruptcyWarningShown +IsInPrincipalDebt +IsInInterestDebt |
+  | Services/Abstractions/IBankruptcyHandler.cs | 接口重设计：CheckBankruptcy + ApplyShippingIncomeDeduction |
+  | Services/Abstractions/ILoanService.cs | +GetCompanyLoans |
+  | Services/Core/LoanService.cs | 重写 DailyTick（动态公司现金扣息+利息欠债+强制划扣+破产冻结+通知）|
+  |                            | IssueLoan 取消加贷→同日同周期合并+每笔独立 |
+  |                            | RepayLoan 逾期/冻结状态不重置到期日 |
+  | Services/Core/BankruptcyHandler.cs | 桩→完整实现（破产判定基于冻结贷款+收入扣款按优先级排序）|
+  | Services/Core/CompanyManager.cs | 注入 IBankruptcyHandler；满足率公式 DBase→Smax |
+  |                                | 倒闭时清零 CropShipmentData；AccInt 重算新增条件 |
+  |                                | 移除 SettleDailyInterest 破产拦截（存款利息正常）|
+  | Services/Core/ModServices.cs | BankruptcyHandler 注入 CompanyManager；+ExemptNextMoneyIncrease |
+  | Services/Core/ShipmentTrackingService.cs | 移除 PendingShippingIncome 计算（统一到 tick 追踪）|
+  | BankMod.cs | DayEnding 金钱快照；DayStarted 过夜扣款；OnUpdateTicked 日间追踪 |
+  |            | 取款/借款豁免标记；RenderedHud 破产标语；_bankruptExitMessageShown |
+  | UI/BankMenu.cs | 破产/欠债红色警告横幅；破产禁借款不禁取款 |
+  |               | 贷款明细/摘要切换；滚动列表(2条)+滚动条+逐条还款 |
+  |               | 一键最大借款/全部还款按钮；逾期欠息显示 |
+  |               | 燃料显示"够烧XX天"；窗口高度 740→820；按钮下移 |
+  |               | 还款后强制刷新标志位+重载存档 |
+  | demand.txt | 阶段八标注完成状态+实际偏差+补丁记录 |
+
+  16.6 构建状态
+
+  [OK] 通过（0 错误 1 警告 CS8602）
+  输出：bin/Release/net6.0/BankModRefactored.dll
+  部署：D:\steam\steamapps\common\Stardew Valley\Mods\BankMod\
+
+
+十七、Stage 9 执行报告（2026-05-14）：公司倒闭、债券转移、阶梯清算、入股救市
+
+  17.1 实现概况
+
+  完成日期：2026-05-14
+  修改/新增文件：7 个
+  构建状态：[OK] 0 Error(s), 1 Warning(s) CS8602
+
+  17.2 实现内容（与 demand 设计偏差汇总）
+
+  9.1 倒闭条件检测 — ❌ 已移除
+    原设计三种条件（无交易天数/利率负值天数/存款枯竭阈值）全部删除。
+    相关 config 字段（BankruptcyNoTradeDays/BankruptcyRateNegativeDays/
+    BankruptcyDepositThreshold/PreBankruptcyGraceDays）已从 ModConfig 和 GMCM 删除。
+    倒闭唯一触发回归：fuel=0 且状态=Dying。
+
+  9.2 债券转移 — ✅
+    TransferLoansFromDyingCompany：燃料耗尽→濒死时触发。
+    贷款转给贷款利率最高的固定公司，利率×DebtTransferRateDiscount（50%），周期 28 天。
+    转移贷款标记 IsTransferred=true，不计入接收公司贷款额度（IssueLoan/CalcMaxBorrow 均排除）。
+    债券转移独立计算，不影响原贷款上限。
+
+  9.3 阶梯清算 — ✅
+    LiquidateCompany：按倒闭时状态返还存款本金。
+    返还比例（GMCM 可配）：繁荣 80%、稳定 50%（≤繁荣）、饥饿 0%、濒死 0%。
+    入股翻倍存款参与返还，PendingRescueDeposit 清零。
+    公司标记 Bankrupt + 出售计数归零 + 存款清零。
+
+  9.4 公司重生 — ✅
+    倒闭时清零 CropShipmentData（CumulativeSellCount/ConsecutiveSellDays/LastSellDay=0）。
+    跨季冷却：BankruptcySeason+BankruptcyYear。
+    重新种植出售达标后生成全新公司（GenerateDynamicCompany 初始燃料含历史出售量）。
+
+  9.5 入股救市（百股购买机制） — ✅ 大幅重设计
+    原设计：简单注资加燃料。
+    新设计：百股购买重组天数。
+      - 每百股价格 = 有效贷款上限 / 7（应用状态乘数后）
+      - +/- UI 弹窗选择购买数量（1~7 百股）
+      - 每百股 = 1 天重组期，累计上限 7（整个重组期总计）
+      - 重组期内：燃料不减少（快照恢复）、濒死限制
+      - 复活条件：燃料满足率 ≥ 80%（稳定期）
+      - 复活：PendingRescueDeposit×2 计入存款本金
+      - 新 UI：RescueInvestMenu.cs（480×320 独立弹窗，+/- 计数 + 确定/取消）
+      - TotalRescueSharesPurchased 累计追踪，买满 7 股后按钮隐藏
+
+  9.6 额外实现（超出 demand 范围）
+    - 贷款上限状态乘数：繁荣×1.0/稳定×0.9/饥饿×0.6/濒死×0.3（GMCM 可配）
+    - 利率状态乘数：繁荣×1.2/稳定×0.9/饥饿×0.7/濒死×0.4
+    - 资产池取款限制：饥饿/濒死期限取款，AssetPoolConsumed 追踪
+    - 饥饿/濒死期禁止借贷：IssueLoan + BankMenu UI 拦截
+    - 移除 BorrowingHardCap：全局贷款上限仅=净资产×杠杆系数
+    - 够烧天数改用实际日消耗（DBase×状态系数）
+
+  17.3 遇到的 Bug 与修复
+
+  Bug 1 — 取款绕开资产池：
+    原因：GetMaxWithdrawal 每笔独立计算，多次取款可耗尽全部存款
+    修复：AssetPoolConsumed 累计追踪，状态脱离饥饿/濒死时清零
+
+  Bug 2 — 资产池双重乘数：
+    原因：GetAllCompanyDefinitions 已应用状态乘数，GetMaxWithdrawal 又乘一次
+    修复：GetMaxWithdrawal 直接使用 company.LoanLimit（已乘过）
+
+  Bug 3 — 入股救市次日可重复购买：
+    原因：RestructuringDaysRemaining 每天递减，次日又可买
+    修复：TotalRescueSharesPurchased 累计追踪（整个重组期总计 7），不随天数递减
+
+  Bug 4 — 入股救市股价用基础而非有效贷款上限：
+    原因：dyn.LoanLimit 是基础值（未乘状态系数），UI 显示的是有效值
+    修复：改用 CurrentCompany.LoanLimit / 7（有效值）
+
+  Bug 5 — 重组期燃料仍在消耗：
+    原因：UpdateDailyInventory 先于 restructuring 检测执行
+    修复：快照→消耗→恢复机制
+
+  Bug 6 — BaseAmount 可取到负数：
+    原因：取款时 BaseAmount -= amount 未充分防护
+    修复：Math.Max(0, BaseAmount - amount)，归零后不再减
+
+  Bug 7 — 债券转移贷款计入接收公司额度：
+    原因：IssueLoan 统计所有 CompanyName 匹配的贷款
+    修复：IsTransferred 标记 + IssueLoan/CalcMaxBorrow 排除
+
+  Bug 8 — 够烧天数不考虑状态消耗差异：
+    原因：daysOfFuel = displayFuel / DBase（基础消耗）
+    修复：改用 displayFuel / dailyConsumption（DBase×状态系数）
+
+  17.4 修改文件清单
+
+  | 文件 | 变更 |
+  |------|------|
+  | Data/DynamicCompanyData.cs | +RestructuringDaysRemaining +TotalRescueSharesPurchased +PendingRescueDeposit +AssetPoolConsumed |
+  | Data/ModConfig.cs | 增：四状态贷款上限乘数+返还比例+RescueInvestmentCapRatio；删：BankruptcyNoTradeDays 等 4 字段 + BorrowingHardCap |
+  | Services/Abstractions/ICompanyManager.cs | +RescueInvest 方法签名 |
+  | Services/Core/CompanyManager.cs | 四状态利率/贷款上限乘数；TransferLoansFromDyingCompany；LiquidateCompany（阶梯返还）；RescueInvest（百股购买）；ProgressRestructuring；GetMaxWithdrawal 简化为单次乘数；TrackShippingAndRateDays/CheckAndProgressPreBankruptcy/EnterPreBankruptcy/GetEffectiveDepositRate 已删除 |
+  | Services/Core/LoanService.cs | IssueLoan 排除 IsTransferred 贷款 + 饥饿/濒死拦截；GetGlobalCreditLimit 移除 BorrowingHardCap |
+  | BankMod.cs | GMCM：增四状态贷款上限乘数滑块+返还比例滑块；删 9.1 条件滑块+硬封顶滑块 |
+  | UI/BankMenu.cs | 入股救市按钮（Dying 状态）；CalcMaxBorrow 排除 IsTransferred；饥饿/濒死借贷拦截；取款 BaseAmount 安全；燃料天数改用实际消耗；重组期状态显示 |
+  | UI/RescueInvestMenu.cs | +新文件：百股购买弹窗（+/- 计数+确定/取消，480×320） |
+  | demand.txt | 阶段九标注完成 + 偏差 + 补丁记录 |
+  | 架构总.txt | V3.11 阶段九补丁追加 |
+
+
+十八、Stage 10 执行报告（2026-05-14）：电视金融频道 (FBN)
+
+  18.1 实现概况
+
+  完成日期：2026-05-14
+  新增文件：2 个（TVPatch.cs, FbnNewsGenerator.cs）
+  修改文件：2 个（BankMod.cs, demand.txt）
+  构建状态：[OK] 0 Error(s), 2 Warning(s) CS8602/CS8603
+  内容源：TV.txt（用户编写的完整频道内容设计文档）
+
+  18.2 实现架构
+
+  频道注入：
+    - Harmony Prefix on TV.checkForAction（return false 跳过原方法）
+    - 重建频道对话框，插入 FBN 选项，保留原版周期性频道
+    - 选 FBN → 反射设 currentChannel=7 → 创建 screen 动画精灵（TV3.png）
+
+  内容生成（FbnNewsGenerator）：
+    - 优先级链：B（献祭）> 三（特殊日期）> 二（公司诞生）> C（全局事件30%）> A/D/E（每日预测/通用）
+    - 场景B：Joja会员 / 社区中心献祭进度检测
+    - 场景二：40 种作物微讯库（每条 1-2 句，按春/夏/秋/冬/跨季组织）
+    - 场景A：模拟明日运气 + 明日天气 → 预测 3 家公司利率涨跌
+    - 场景D/E：运气/天气利率影响关闭时，随机播放镇长/玛妮/威利/格斯访谈
+
+  屏幕显示：
+    - AssetRequested 注册 Mods/BankMod/FBNScreen → 加载 assets/TV3.png
+    - 反射写 TV.screen 字段 → TemporaryAnimatedSprite（168×112×2帧）
+    - 缩放：getScreenSizeModifier() * 0.25f
+    - 退出：tv.turnOffTV() 自动清 screen=null
+
+  18.3 关键技术决策
+
+  - 放弃 Data/TV/Channels 注册（与 Harmony Prefix 互斥，死代码）
+  - 放弃 Postfix 替换对话框（原方法已创建，无法修改）
+  - 使用 TV.checkForAction Prefix + return false（跳过原方法，完整控制）
+  - 不使用 SafeDialogueBox（不是电视内容），使用 Game1.multipleDialogues
+  - 所有字段名从 SDV 1.6 反编译源码验证（currentChannel/screen/turnOffTV 等）
+
+  18.4 遇到的 Bug 与修复
+
+  Bug 1 — 编译时 TemporaryAnimatedSprite 构造函数参数不匹配：
+    原因：SDK 与游戏版本差异
+    修复：从反编译源码 TV.selectChannel L103 抄参数顺序（15 参数完整签名）
+
+  Bug 2 — 反编译源码污染编译：
+    原因：StardewValleyDecompiled-main 目录在项目内导致类型重复
+    修复：move 到项目目录外
+
+  Bug 3 — 第一次加载存档弹出 "恭喜享受春天"：
+    原因：_bankruptExitMessageShown 初始 false，首帧非破产就触发
+    修复：加 _wasBankruptThisSession 标记，确实经历过破产才弹
+
+  Bug 4 — 天气在预测中重复显示：
+    原因：运气行和天气影响行各写了一次天气
+    修复：合并为一行 "运气：X | 明日Y，Z"
+
+  18.5 修改文件清单
+
+  | 文件 | 变更 |
+  |------|------|
+  | Patches/TVPatch.cs | +新文件：Harmony Prefix(return false) 频道注入 + 反射 screen 精灵 + 退出 |
+  | Patches/FbnNewsGenerator.cs | +新文件：6 场景优先级内容生成器 + 40 作物微讯 + AM/PM 逻辑 |
+  | BankMod.cs | +using System.IO, +FBNScreen AssetRequested, +Harmony 注册 |
+  | demand.txt | 阶段十更新为实际实现状态 |ENDOFFILE
+
+
+十八、Stage 10 执行报告（2026-05-14）：电视金融频道 (FBN)
+
+  18.1 实现概况
+
+  完成日期：2026-05-14
+  新增文件：2 个（TVPatch.cs, FbnNewsGenerator.cs）
+  修改文件：2 个（BankMod.cs, demand.txt）
+  构建状态：[OK] 0 Error(s), 2 Warning(s)
+  内容源：TV.txt（用户编写的完整频道内容设计文档）
+
+  18.2 实现架构
+
+  频道注入：
+    - Harmony Prefix on TV.checkForAction（return false 跳过原方法）
+    - 重建频道对话框，插入 FBN 选项，保留原版周期性频道
+    - 选 FBN -> 反射设 currentChannel=7 -> 创建 screen 动画精灵（TV3.png）
+
+  内容生成（FbnNewsGenerator）：
+    - 优先级链：B（献祭）> 三（特殊日期）> 二（公司诞生）> C（全局事件30%）> A/D/E（每日预测/通用）
+    - 场景B：Joja会员 / 社区中心献祭进度检测（mailReceived 标志）
+    - 场景二：40 种作物微讯库（每条 1-2 句，按春/夏/秋/冬/跨季组织，内容来自 TV.txt）
+    - 场景A：模拟明日运气 + Game1.weatherForTomorrow -> 预测 3 家公司利率涨跌
+    - 场景D/E：运气/天气利率影响关闭时，随机播放镇长/玛妮/威利/格斯访谈
+
+  屏幕显示：
+    - AssetRequested 注册 Mods/BankMod/FBNScreen -> 加载 assets/TV3.png
+    - 反射写 TV.screen 字段 -> TemporaryAnimatedSprite（168x112x2帧）
+    - 缩放：getScreenSizeModifier() * 0.25f
+    - 退出：tv.turnOffTV() 自动清 screen=null
+
+  18.3 关键技术决策
+
+  - 放弃 Data/TV/Channels 注册（与 Harmony Prefix 互斥，死代码）
+  - 放弃 Postfix 替换对话框（原方法已创建，无法修改）
+  - 使用 TV.checkForAction Prefix + return false（跳过原方法，完整控制）
+  - 不使用 SafeDialogueBox（不是电视内容），使用 Game1.multipleDialogues
+  - 所有字段名从 SDV 1.6 反编译源码验证（currentChannel/screen/turnOffTV 等）
+
+  18.4 遇到的 Bug 与修复
+
+  Bug 1 — TemporaryAnimatedSprite 构造函数参数不匹配：
+    原因：SDK 与游戏版本差异
+    修复：从反编译源码 TV.selectChannel L103 抄参数顺序（15 参数完整签名）
+
+  Bug 2 — 反编译源码污染编译：
+    原因：StardewValleyDecompiled-main 目录在项目内导致类型重复
+    修复：move 到项目目录外
+
+  Bug 3 — 第一次加载存档弹出 恭喜享受春天：
+    原因：_bankruptExitMessageShown 初始 false，首帧非破产就触发
+    修复：加 _wasBankruptThisSession 标记
+
+  Bug 4 — 天气在预测中重复显示：
+    原因：运气行和天气影响行各写了一次天气
+    修复：合并为一行
+
+  18.5 修改文件清单
+
+  Patches/TVPatch.cs        +新：Harmony Prefix(return false) 频道注入 + 反射 screen 精灵 + 退出
+  Patches/FbnNewsGenerator.cs +新：6 场景优先级内容生成器 + 40 作物微讯 + AM/PM 逻辑
+  BankMod.cs                +using System.IO +FBNScreen AssetRequested +Harmony 注册
+  demand.txt                阶段十更新为实际实现状态
+
+
+
+十九、季节过渡机制（2026-05-14）：3天观望期 + 四种去向 + FBN特别报道
+
+  19.1 实现概况
+
+  修改文件：3 个（CompanyManager.cs, BankMenu.cs, FbnNewsGenerator.cs）
+  新增字段：SeasonTransitionDays（DynamicCompanyData）
+  构建状态：[OK]
+
+  19.2 机制说明
+
+  季节第 1 天：所有非新公司动态公司进入 3 天观望期（SeasonTransitionDays=3）
+  季节第 1-3 天：状态冻结，不更新，不倒闭。FBN 附加快讯片段（不替代利率预测）
+  季节第 4 天：处理四种去向
+
+  19.3 四种去向（代码实现）
+
+  | 去向 | 条件 | 概率 | 效果 |
+  |------|------|------|------|
+  | 光荣退休 | 繁荣 + 出货<阈值 | 20% | 存款退还，债券转移，公司关闭 |
+  | 成功转型 | 繁荣/稳定 + 栏位满 + 有新作物达标 | 50% | 保留存贷，改名换作物，重置为新公司 |
+  | 倒闭撤退 | 饥饿→60%，濒死→80% | — | 债券转移 + 阶梯清算 |
+  | 硬撑存续 | 其余 | — | 照常 |
+
+  19.4 辅助变更
+
+  - 新公司保护期：14天→3天
+  - 新公司不参与观望期
+  - 倒闭释放生成配额，当日可补位
+  - UI 显示 [季节观望剩X天]
+  - TV 四季节目开场白
+  - 转型消息显示旧名→新名
+
+  19.5 修改文件
+
+  CompanyManager.cs        ProcessSeasonTransition + NewCompanyProtectionDays=3 + 倒闭释放配额 + 当日补位
+  BankMenu.cs              季节观望状态显示 overlay
+  FbnNewsGenerator.cs      季节过渡 TV 快讯（第1-3天）+ 特别报道（第4天）+ 开场白按季节
+  TV.txt                   四种去向更新为代码对齐版本
+
+
+
+二十、Stage 11 执行报告（2026-05-14）：季节初农产品采购 + Stage 12 标记完成
+
+  20.1 实现概况（Stage 11）
+
+  新增文件：0（移除 SeasonShopMenu.cs）
+  修改文件：2（BankMod.cs, demand.txt）
+  构建状态：[OK]
+
+  20.2 实现方式
+
+  - 原版商店注入：OnMenuChanged 检测 ShopMenu 打开 -> InjectSeasonalCrops 直接写 shop.itemPriceAndStock
+  - 差价检测：商店关闭时通过 _preShopInventory 差量检测购买，应用 -5 FP
+  - 每日限购追踪：SeasonShopSold 字典按 shop+crop+day 追踪，换天自动清零
+  - 选择框拦截：MenuChanged 关闭 ShopMenu -> 弹出购买/打压选择 -> _shopSkipped 再进店
+
+  20.3 作物筛选规则（六重）
+
+  1. CropDataProvider.GetCropsForSeason(season) — 当季可种
+  2. R > 0
+  3. IsPurchasable = true
+  4. 非献祭（Pantry 完成或 Joja 路线后解锁）
+  5. 非姜岛（willyBoatFixed 后解锁）
+  6. 杨桃需 ccVault
+
+  20.4 Stage 12 标记完成
+
+  阶段十二所有步骤已在 Stage 8-9 中实现：
+  - 12.1 净资产计算 -> LoanService.GetGlobalCreditLimit
+  - 12.2 全局借款上限 -> 净资产 x 杠杆系数（BorrowingHardCap 已移除）
+  - 12.3 状态绑定贷款上限 -> 四状态 GMCM 乘数
+  - 12.4 破产借款锁定 -> IssueLoan 拦截
+  标记为已完成。
+
+  20.5 修改文件
+
+  BankMod.cs    InjectSeasonalCrops + 选择框拦截 + SeasonShopSold + 购买检测
+  demand.txt    阶段十一更新为实际实现，阶段十二标记完成
+
+
+
+二十一、Stage 13 执行报告（2026-05-14）：多人模式完整实现
+
+  21.1 实现概况
+
+  新增文件：1（Messages/MultiplayerMessages.cs）
+  修改文件：3（BankMod.cs, ModServices.cs, BankMenu.cs）
+  构建状态：[OK] 0 Error(s), 5 Warning(s)
+
+  21.2 消息协议
+
+  ConfigSyncMessage：主机->客机，同步利率/开关/阈值
+  BankOperationRequest：客机->主机，金融操作（Deposit/Withdraw/Borrow/Repay/Transfer）
+  BankDataSync：主机->全体，操作后余额同步
+  BankSnapshot：主机->全体，日结算后全量快照
+
+  21.3 关键实现
+
+  - OnPeerConnected：主机检测新连接->构造ConfigSyncMessage->SendMessage
+  - OnModMessageReceived：按e.Type分发到四种消息处理器
+  - ProcessRemoteOperation：解析操作类型，执行本地逻辑，广播BankDataSync
+  - 操作锁：Dictionary<long,bool> 防止同一客户端并发请求
+  - 快照广播：OnDayStarted结算后SendMessage(BankSnapshot)
+  - 全局日志：[MP] 前缀，覆盖连接/配置/操作/同步/快照五个环节
+  - BankMenu客机操作：IsMainPlayer检查替换为SendRemoteOperation调用
+
+  21.4 日志标记速查表
+
+  [MP] PeerConnected    — 客户端连接事件
+  [MP] ConfigSync       — 配置同步发送/接收/应用
+  [MP] BankOperation    — 远程金融操作接收/处理/结果
+  [MP] BankDataSync     — 操作后数据同步（含余额变更前后对比）
+  [MP] Snapshot         — 日结算快照广播/接收（逐公司详情）
+  [MP] SendMessage      — 消息发送（含目标ID）
+
+  21.5 修改文件清单
+
+  Messages/MultiplayerMessages.cs  +新：4个[Serializable]消息DTO
+  BankMod.cs                       OnPeerConnected+OnModMessageReceived完整实现+ProcessRemoteOperation+操作锁+快照+全局[MP]日志
+  Services/Core/ModServices.cs     +SendRemoteOperation回调
+  UI/BankMenu.cs                   IsMainPlayer检查改为远程操作调用
+
+
+
+二十二、补丁记录（2026-05-14）：手机检测修复 + 还款日显示 + 商店拦截
+
+  22.1 手机多份补发问题
+
+  根因：OnInventoryChanged 用 PlayerHasPhone() 检查当前背包，手机放箱子即判定丢失
+  最终方案：双布尔标记 + 隔日判断
+    - _phoneSeenInInventory：e.Added 出现手机 -> true
+    - _phonePutInChest：e.Removed 出现手机 且 activeMenu 为 ItemGrabMenu -> true
+    - OnDayStarted：flag=1 且 seen 且 !chest 且 !PlayerHasPhone() -> 判定丢失 -> 补发
+    - 两个标记每日归零
+  优点：不搜全图箱子，不误判光标拿起状态，不误判箱子存取
+
+  22.2 还款日显示格式
+
+  原显示：(第 {DueDay} 天) — DueDay 是 Game1.stats.DaysPlayed 总天数
+  修正：((DueDay - 1) % 28) + 1 — 换算为 1-28 的月内日
+  影响三处：摘要视图 + 明细视图（正常） + 明细视图（宽限期）
+
+  22.3 皮埃尔商店误拦截
+
+  原条件：shopId == SeedShop || shopId.Contains(Joja) || location == JojaMart
+  修正：去掉 SeedShop，仅 JojaMart 弹出「购买商品/出售农产品」选择框
+  皮埃尔商店恢复原版正常购物流程
+
+  [OK] V3.15 阶段十四：路线完成事件与网购系统（2026-05-21）
+
+
+二十三、阶段十四：路线完成事件与网购系统（V3.15）
+
+  23.1 概述
+
+  阶段十四在玩家完成 Joja 或 CC 路线后触发回调过场动画，并解锁手机网购功能。
+  路线效果（改名、打压上限、季节作物）在香草事件完成时立即生效，存档独立。
+
+  23.2 路线检测与事件触发
+
+  Joja 路线：
+    - 事件 ID 502261（J/w sunny/H）开始 → 标记 CompletedRoute="Joja" → ApplyRouteEffects()
+    - 事件结束后自动触发 joja.txt 过场（黑屏+message 文字）
+    - 旧存档：OnSaveLoaded → DetectRouteCompletion（JojaMember + 5项目邮件）
+
+  CC 路线：
+    - 事件 ID 191393 开始 或 进入 AbandonedJojaMart → CompletedRoute="Community" → ApplyRouteEffects()
+    - 过场仅在 AbandonedJojaMart 触发（OnWarped），加载时不自动弹
+    - 旧存档若已建成电影院（ccMovieTheater）→ 跳过过场，直接解锁网购
+
+  23.3 路线效果（ApplyRouteEffects）
+
+  改名（_originalCompanyNames 备份恢复机制）：
+    - CC 路线：Joja超市 → 皮埃尔子公司
+    - Joja 路线：皮埃尔的杂货店 → Joja子公司
+
+  游戏性变化：
+    CC 路线（PierreBoosted=true）：
+      - 皮埃尔打压上限 ×2（CompanyManager.SuppressMaxStacks 3→6）
+      - 皮埃尔季节作物上限 ×2（10→20 个/天）
+    Joja 路线（JojaBoosted=true, PierreSuppressionDisabled=true）：
+      - 皮埃尔失去商店打压功能（柜台仅显示"购买商品"）
+      - 皮埃尔失去季节作物注入（InjectSeasonalCrops 直接返回）
+      - Joja 打压上限 ×2 + 季节作物 ×2
+
+  23.4 过场动画系统
+
+  StartRouteEvent 解析 .txt 脚本 → 构建 SDV 原生 Event 字符串：
+
+  指令映射：
+    /text "描述"       → message "描述"        旁白文字
+    /speak NPC "文本"  → speak NPC "文本"       NPC 对话（CC 路线）
+                       → message "文本"         纯文字（Joja 路线：黑屏模式）
+    /speak Phone "文本" → jump Pierre + speak Lewis "文本"  电话对话
+    /pause ms          → pause ms              等待
+    /emote NPC ID      → emote NPC ID          表情
+    /move NPC X Y      → warp NPC X Y          移动
+    /cutscene spawnJunimo → 累计时间计算帧数 → SpawnJunimos(TemporaryAnimatedSprite)
+    /end               → end + 事件结束回调 UnlockOnlineShopping()
+
+  事件头部：
+    - CC：continue/6 8/farmer 6 10 0 Pierre 6 8 2  （皮埃尔在废弃Joja超市内，玩家朝上）
+    - Joja：continue/-1000 -1000/farmer -1000 -1000 0/globalFade/pause 100 （黑屏模式）
+
+  播放：Game1.currentLocation.startEvent(new Event(script, Game1.player))
+  结束检测：OnUpdateTicked 中 _modEventPlaying && !eventActive → UnlockOnlineShopping()
+
+  祝尼魔生成（SpawnJunimos）：
+    - 解析阶段累计所有 /pause 毫秒数 ÷16 → _junimoSpawnFrames 帧数
+    - OnUpdateTicked 逐帧倒数至 0 → 在当前位置生成 5 个 TemporaryAnimatedSprite
+    - 纹理：LooseSprites/Junimos，16×16，3x 缩放，6 帧动画，150ms 间隔，99999 循环
+
+  23.5 网购系统
+
+  解锁：路线过场播放完毕 → _services.OnlineShoppingUnlocked=true → 手机银行显示"网购"按钮
+
+  营业时间检查（BankMenu.GetShopClosedReason）：
+    皮埃尔： 9:00-21:00  周三+夏26休
+    铁匠铺： 9:00-16:00  周四休
+    木匠铺： 9:00-20:00  周二休
+    Joja：   9:00-23:00  周六休
+    沙漠：   9:00-23:00  周二休  需公交（ccVault||ccBus）
+    姜岛：   全天        -      需船只（willyBoatFixed||willyBackRoomInvitation）
+
+  选择时显示 [关闭原因] 标签，点击已关闭店铺弹 "该商店未营业（原因）"
+
+  运费系统：config.EnableDeliveryFee → DeliveryFeeFlat 固定运费 → 余额不足拦截
+
+  23.6 关键设计决策
+
+  - 路线效果在香草事件触发时生效，非网购解锁时。确保玩家在事件过程中已看到改名效果。
+  - _originalCompanyNames 在首次加载时保存原始公司名，每次 ApplyRouteEffects 先恢复再改名，防止跨存档污染。
+  - Joja 事件后 Morris 不存在于游戏中，speak Morris 会失败，改用 message 纯文字模式。
+  - CC 过场仅限 AbandonedJojaMart 触发（OnWarped），防止旧存档加载时在其他地点意外弹出。
+  - 电影院检测（ccMovieTheater）：AbandonedJojaMart 已不存在，直接跳过过场给网购。
+
+  23.7 修改文件
+
+  BankMod.cs                        +Stage14 全流程（DetectRouteCompletion/ApplyRouteEffects/StartRouteEvent/UnlockOnlineShopping）
+                                    +OnWarped(CC位置触发) +OnUpdateTicked(事件ID检测/祝尼魔计时/事件结束)
+                                    +_originalCompanyNames 备份 + _routeEffectsApplied 防重复
+  Services/Core/ModServices.cs      +CompletedRoute/OnlineShoppingUnlocked/PierreBoosted/JojaBoosted
+  Services/Core/CompanyManager.cs   +PierreSuppressionDisabled/JojaSuppressionBoosted/PierreSuppressionBoosted
+                                    ApplySuppression 中 effectiveMaxStacks 根据路线加倍
+  UI/BankMenu.cs                    +GetShopClosedReason 营业时间/休息日/解锁条件检查
+  UI/BankMenu.cs                    网购按钮→选择列表→时间检查→运费→打开商店
+  BankMod.cs InjectSeasonalCrops    路线判断：PierreSuppressed 跳过，Boosted 上限 20
+  BankMod.cs 商店拦截                路线判断：JojaBoosted+Pierre 商店去掉"出售农产品"选项
+  assets/joja.txt                   Joja 过场脚本（Morris 对话 → message 黑屏模式）
+  assets/献祭.txt                    CC 过场脚本（Pierre+Phone+Junimo 完整场景）
+  Data/ModConfig.cs                 +OnlineShopList/DeliveryFee/DeliveryFeePercentage/DeliveryFeeFlat
+  demand.txt                        +阶段十四完整需求说明
+
+  [OK] V3.16 阶段十四 SMAPI 合规重构 + 持久化修复（2026-05-24）
+
+
+二十四、V3.16 合规重构 + 路线持久化 + 打压拦截补完
+
+  24.1 SMAPI 合规重构
+
+  重构动机：V3.15 中路线检测/事件脚本/商店营业全部硬编码在 BankMod.cs，
+  违反 CLAUDE.md 架构分层要求，且部分 API 调用依赖未文档化的游戏内部数据。
+
+  新增文件：
+    Domain/MailFlags.cs                      集中化常量（事件ID/邮件标记/存档键，来源 wiki）
+    Services/Abstractions/IRouteService.cs    路线检测接口
+    Services/Abstractions/IEventScriptService.cs  事件脚本构建接口
+    Services/Abstractions/IStoreHoursService.cs   商店营业时间接口
+    Services/Core/RouteService.cs             路线检测实现（eventsSeen 为主）
+    Services/Core/EventScriptService.cs       事件脚本构建实现
+    Services/Core/StoreHoursService.cs        商店营业时间（读取 time.txt 为权威数据源）
+    UI/BankruptBanner.cs                     破产标语覆盖层（IClickableMenu → Game1.onScreenMenus）
+
+  迁移内容：
+    BankMod.cs → RouteService:         DetectRoute, ApplyRouteEffects, UnlockOnlineShopping
+    BankMod.cs → EventScriptService:   StartRouteEvent (含 DSL 解析器), SpawnJunimos
+    BankMod.cs → StoreHoursService:    GetShopClosedReason（time.txt 解析替代硬编码 switch）
+    BankMod.cs → BankruptBanner:       OnRenderedHud 破产标语 → IClickableMenu overlay
+
+  24.2 路线检测改进
+
+  原方案：Game1.CurrentEvent.id.Contains("502261") — 依赖未文档化的事件 ID 格式
+  新方案：DetectRouteFromEvent(eventId) — 实时检测当前播放事件 ID
+          DetectRoute — eventsSeen.Contains("502261") + hasCompletedCommunityCenter() + 邮件回退
+
+  24.3 事件脚本 — SDV 1.6 原生指令
+
+  祝尼魔动画：从 TemporaryAnimatedSprite 手动生成 → temporaryAnimatedSprite 原生事件指令
+    temporaryAnimatedSprite <texture> <rect> <interval> <frames> <loops> <tileXY> ...
+  纹理注册：AssetRequested 拦截无斜杠名称（znmz, znmh, znmf, znm），避免 / 被事件系统分割
+
+  24.4 路线效果持久化
+
+  问题：WriteJsonFile 是 mod 全局的，所有存档共享；WriteSaveData 依赖存档周期
+  解决：
+    - WriteSaveData 存档隔离存储（bm_route, bm_shop, bm_fx, bm_cut, bm_pb, bm_jb）
+    - OnSaving 事件确保存档前写入
+    - LoadFromSave 恢复所有标记 + CompanyManager 标记
+    - 旧档迁移：fx=True 但 pb=False/jb=False → 自动重置 guard 重跑 ApplyRouteEffects
+
+  24.5 打压拦截补完（三防线）
+
+  1. 选择框拦截：CC 路线 Joja 无"出售农产品" / Joja 路线 Pierre 无
+  2. 季节作物拦截：CC 路线 Joja 不注入 / Joja 路线 Pierre 不注入
+  3. 店铺卖货拦截：CC 路线 Joja 卖货不扣 FP / Joja 路线 Pierre 卖货不扣 FP
+     （OnMenuChanged 库存差检测 → RecordExternalSale 前加路线判断）
+
+  24.6 公司生成重复修复
+
+  问题：公司破产后同作物继续卖货 → 创建第二个同名公司（Status != Bankrupt 的排除不完整）
+  修复：同季节已有任何同名公司（含破产）→ 不创建
+        跨季节：ResetSeasonalSpawnCounter 移除破产公司 + 重置出货计数器
+
+  24.7 修改文件总览
+
+  Domain/MailFlags.cs               +新
+  Services/Abstractions/IRouteService.cs +新
+  Services/Abstractions/IEventScriptService.cs +新
+  Services/Abstractions/IStoreHoursService.cs +新
+  Services/Core/RouteService.cs     +新
+  Services/Core/EventScriptService.cs +新
+  Services/Core/StoreHoursService.cs +新
+  UI/BankruptBanner.cs              +新
+  BankMod.cs                        -200 行（删除 OnRenderedHud 等），+路由检测/持久化/三防线
+  Services/Core/ModServices.cs      +RouteService/EventScriptService/StoreHoursService
+  Services/Core/CompanyManager.cs   +季节清理破产公司 + 重复检查修复
+  UI/BankMenu.cs                    GetShopClosedReason → StoreHoursService 委托
+  assets/znm*.png                    12 个祝尼魔精灵（16x16, 紫/黄/粉/绿）
+  demand.txt                        +阶段十四完整需求说明
+
+  [OK] V3.16 补丁 — 持久化修复 + 打压三防线 + 姜岛锁 + 网购排除（2026-05-24）
+
+  24.8 V3.16 补丁记录
+
+  24.8.1 路线持久化：SaveToSave 写入 6 个存档键（bm_route/bm_shop/bm_fx/bm_cut/bm_pb/bm_jb），
+    OnSaving 事件确保存档前写入，LoadFromSave 恢复全部标记 + CompanyManager 标记，
+    旧档迁移（fx=True 但 pb=False/jb=False）自动重置 guard 重跑 ApplyRouteEffects。
+
+  24.8.2 打压三防线：
+    防线1：选择框 — CC 路线 Joja 无"出售农产品"，Joja 路线 Pierre 无
+    防线2：季节作物 — CC 路线 Joja 不注入，Joja 路线 Pierre 不注入
+    防线3：店铺卖货 — RecordExternalSale 前路线判断，被压制方不扣 FP
+
+  24.8.3 公司生成重复修复：同季节已有同名公司（含破产）→ 不创建；
+    跨季节：ResetSeasonalSpawnCounter 移除破产公司 + 重置出货计数器。
+
+  24.8.4 姜岛锁：只检查 willyBoatFixed（移除 willyBackRoomInvitation，邀请信不等于已修船）。
+
+  24.8.5 网购排除：CC 路线网购列表不显示 Joja（已不存在）。
+
+  24.8.6 破产标语：BankruptBanner : IClickableMenu → Game1.onScreenMenus，
+    替代原 OnRenderedHud + Game1.spriteBatch 方案（消除截图泄漏）。
+
+  24.8.7 破产 UI 联动：破产时标语置顶（y+4），标题自动下移（y+18），分隔线跟随动态偏移。
+
+  24.8.8 破产跨存档：_lastBankruptcyState 替代 _bankruptExitMessageShown。
+    每帧检测 true→false 状态变化才弹 "恭喜"，OnSaveLoaded 从存档数据初始化状态。
+    消除切存档误弹问题。
+
+  [OK] V3.17 补丁 — 路线持久化完善 + 贷款改名同步 + 存档隔离加固（2026-05-25）
+
+
+二十五、V3.17 路线持久化完善 + 跨存档隔离加固
+
+  25.1 公司改名→贷款同步
+
+  问题：路线完成后改名只改了 _config.Companies[i].Name，account.Loans 和
+    account.CompanyAccounts 中的 CompanyName 仍是旧名。贷款查找 Where(l.CompanyName == name)
+    匹配失败 → 已有贷款"消失"（但不影响计息），借款上限计算也不扣除已有贷款。
+  修复：ApplyRouteEffects 中改名后遍历所有贷款/账户记录，将旧名替换为新名并保存。
+    CC 路线和 Joja 路线均已修复。
+
+  25.2 存档隔离加固 — 公司改名
+
+  问题：_config.Companies 是全局单例，改名是 in-place 修改。上一个存档的改名残留到下一个存档。
+  修复（三重防护）：
+    1. LoadFromSave 从 config.json 磁盘文件读取真正原始名（不依赖内存对象）
+    2. 每次加载先恢复全部原始名，再根据 fx 状态应用路线改名
+    3. ApplyRouteEffects 中恢复→改名顺序保证
+  已验证：CC→Joja→新存档切换，公司名正确隔离。
+
+  25.3 破产跨存档
+
+  问题：_bankruptExitMessageShown 是 BankMod 字段，跨存档保留。
+    破产存档退出→正常存档加载→标志仍为 true→弹 "恭喜"。
+  修复：_lastBankruptcyState 替代，每帧检测 true→false 状态变化。OnSaveLoaded
+    先 InvalidateCache 再 Load 获取新存档的破产状态初始化。
+
+  25.4 FBN 金融频道修复
+
+  - 路线新闻（TryBundleNews）：_bundleNewsShown 标志位，播一次后永不再堵死其他新闻
+  - 每日缓存（_cachedContent）：同一天多次看 TV 返回缓存，不重复触发运气预测
+
+  25.5 性能优化
+
+  BankAccountService.Load() 加内存缓存（_cache），首次 JSON 反序列化后缓存对象，
+  后续调用直接返回。InvalidateCache() 在 OnSaveLoaded 中清缓存。消除重复反序列化开销。
+
+  25.6 UI 优化
+
+  - 标题+署名同行居中（"Dynamic Financial System  by yixingtianya"）
+  - 破产标语置顶联动标题下移
+
+  25.7 FBN 遗留文件清理
+
+  删除 4 个过期文件：UI/SeasonShopMenu.cs, 根目录 joja.txt, 根目录 献祭.txt,
+    assets/ChatGPT Image *.png
+
+  [OK] V3.18 阶段十五：复利模式 + FBN 真假倒闭事件（2026-05-31）
+
+
+二十六、阶段十五：复利模式与金融频道真假事件
+
+  26.1 存款复利模式
+
+  规则（value2.txt 二）：
+    - 仅动态公司可用，GMCM 复利计算开关控制
+    - 全公司共用复利天数（10-21 天可配，默认 14）
+    - 同一时间仅一家公司，开启后利息按 DepositBalance 计算（替代 BaseAmount）
+    - 复利用完 → 112 天冷却
+    - 复利期间 DetectManualCompoundInterest 跳过该公司
+
+  实现：
+    Data/ModConfig.cs         +CompoundDurationDays
+    Data/BankAccountData.cs   +CompoundActiveCompany/CompoundDaysRemaining/CompoundCooldownDays
+    CompanyManager.cs         利息计算 principal=isCompound?DepositBalance:BaseAmount
+                              OnDayStarted 每日扣减 + 冷却启动
+    BankMenu.cs               复利按钮（明细右侧），开启/关闭/冷却三态
+    BankMod.cs                GMCM 复用 UseCompoundInterest 开关
+
+  26.2 FBN 真假倒闭事件
+
+  规则（value2.txt 四）：
+    - 每季 1 真 + 2-3 假，随机触发，不连续
+    - 真消息：目标公司当日倒闭概率 = 繁荣年风险值（如 35%）
+    - 假消息：纯叙事不影响概率
+    - TV2.txt（危机）/ TV2活.txt（存活）/ TV2死.txt（倒闭）自动匹配公司名
+    - 玩家无法从新闻模式区分真假（控制台日志标注 real=True/False）
+
+  实现：
+    Data/BankAccountData.cs   +FbnSeason/FbnLastEventDay/FbnTrueUsed/FbnFalseUsed/FbnFalseQuota
+                              +FbnTempBoostCompany/FbnEventCompany/FbnEventDay/FbnShowOutcome
+    CompanyManager.cs         TryTriggerFbnEvent 每日检测 + 日倒闭概率系统
+                              UpdateCompanyStatuses 繁荣/稳定/饥饿/濒死日概率
+    FbnNewsGenerator.cs       TryFbnEventNews 优先级2（仅次于bundle news）
+                              ReadTv2Section 按公司名解析 TV2 文件
+                              InvalidateCache 测试命令刷新
+    ModConfig.cs              +ProsperousAnnualRisk（15-50%）+ DisableNaturalBankruptcy
+    BankMod.cs                GMCM 自然倒闭风险 + 休闲模式 + fbn_test 控制台命令
+
+  26.3 日倒闭概率系统
+
+    繁荣: daily = 1 - (1 - annual)^(1/112)
+    稳定: daily = 繁荣 × 0.3
+    饥饿: 5% (固定)
+    濒死: 15% (固定)
+    保护/新公司: 0%
+    FBN 真事件: daily = annual_rate (直接年风险作为日概率)
+
+  26.4 NPC 对话系统（欠债·破产·还清祝贺·配偶专属）
+
+    触发方式：Harmony Prefix on NPC.checkAction → Game1.afterDialogues
+             原版对话先播放，mod 对话在回调中追加
+
+    四套对话线：
+    ┌──────────────┬──────────┬─────────────────────────┐
+    │ 对话线         │ 触发条件   │ 特点                     │
+    ├──────────────┼──────────┼─────────────────────────┤
+    │ DebtLines     │ 欠债+15%  │ 三档好感度，同日同NPC一次   │
+    │ BankruptLines │ 破产      │ 三档好感度，hearts≥8 赠礼  │
+    │ CongratsLines │ 还清后    │ 每NPC一次，Pierre/Lewis专属 │
+    │ SpouseLines   │ 欠债/破产 │ 无随机，始终触发，专属赠礼  │
+    └──────────────┴──────────┴─────────────────────────┘
+
+    配偶检测：Game1.player.spouse == npcName || Game1.player.isRoommate(npcName)
+    11 位配偶+Krobus：Abigail, Elliott, Harvey, Haley, Leah, Maru, Penny,
+                      Sam, Sebastian, Shane, Krobus
+
+    数据模型（BankAccountData 新增）：
+      DebtNpcSpoken, BankruptcyNpcGifted, CongratsNpcSpoken, DebtClearedCongratsShown
+
+    实现文件：
+      Services/Core/DebtDialogueService.cs  +SpouseLines +isPartner 集成
+      Patches/NpcDialoguePatch.cs           Harmony Prefix + afterDialogues
+
+  26.5 本阶段 Bug 修复（2026-05-26）
+
+    Bug A — 祝贺对话不播放：
+      根因：afterDialogues 先 MarkCongratsSpoken 将 NPC 加入列表，
+            GetCongratsLine 检查 Contains → 返回 null → 对话永不播放
+      修复：交换顺序，先 GetCongratsLine 再 MarkCongratsSpoken
+
+    Bug B — Morris 事件后 Joja 收银员无选择框：
+      根因：商店拦截守卫仅检查 CompletedRoute，Morris 事件走独立触发路径
+      修复：守卫加 _morrisEventSeen 条件
+
+    Bug C — Shane 配偶破产赠礼名称：
+      根因：giftName="披萨+啤酒" 无法对应单物品，且已在 TryBankruptcyDialogue 特殊处理
+      修复：改为 "披萨"
+
+  26.6 修改文件清单（Stage 15 完整）
+
+  Services/Core/DebtDialogueService.cs   新增/修改：SpouseLines 类（3方法）+ isPartner 全方法集成
+  Patches/NpcDialoguePatch.cs            新增：Harmony NPC.checkAction Prefix + afterDialogues
+  BankMod.cs                             Stage 15 Harmony 初始化 + Morris 守卫修复
+  Data/BankAccountData.cs                +4 对话追踪字段 + FBN 字段 + Compound 字段
+  Data/ModConfig.cs                      +CompoundDurationDays + ProsperousAnnualRisk + DisableNaturalBankruptcy
+  Services/Core/CompanyManager.cs        TryTriggerFbnEvent + 日倒闭概率 + 复利检测
+  Patches/FbnNewsGenerator.cs            TryFbnEventNews + ReadTv2Section
+  UI/BankMenu.cs                         复利按钮（三态）
+
+
+二十七、Bug 修复补丁（2026-05-29）：手机丢失检测 + 手机本地化 + 公司名回退
+
+  27.1 Bug 1 — 手机丢失检测失败（跨日丢失无法补发）
+
+  问题现象
+    玩家将银行手机扔进垃圾桶后，第二天不会收到补发邮件。
+
+  根因分析
+    OnDayStarted 中手机丢失检测依赖两个 in-memory 布尔字段：
+      _phoneSeenInInventory — 标记手机曾出现在背包
+      _phonePutInChest — 标记手机被放入箱子
+    这两个字段在每天 OnDayStarted 开始时被重置为 false。
+    如果手机在昨天获得（flag="1"），今天 OnDayStarted 执行时：
+      _phoneSeenInInventory = false（刚重置）
+      → 条件 phoneFlag=="1" && _phoneSeenInInventory && !_phonePutInChest && !PlayerHasPhone()
+      → 永远不会为 true
+      → 手机丢失永远不会被检测到
+
+  修复方案
+    用 SMAPI 持久化存档存储（ReadSaveData/WriteSaveData）替代 in-memory 变量：
+      - 新增存档键 "BankMod_PhoneInChest"（"1"=手机在箱子中，"0"=不在箱子）
+      - OnInventoryChanged：
+        e.Removed 包含手机 且 activeMenu 是 ItemGrabMenu → WriteSaveData("BankMod_PhoneInChest", "1")
+        e.Added 包含手机 → WriteSaveData("BankMod_PhoneInChest", "0")
+      - OnDayStarted：
+        bool phoneInChest = ReadSaveData<string>("BankMod_PhoneInChest") == "1";
+        if (phoneFlag=="1" && !phoneInChest && !PlayerHasPhone()) → 判定丢失 → 补发
+
+  优势
+    - 跨日持久化：即使游戏重启，箱子标记仍然保留
+    - 不搜全图箱子，只追踪"手机是否在箱子"这一语义
+    - 不误判光标拿起状态、不误判箱子存取
+
+  删除字段
+    - _phoneSeenInInventory（已被持久化存档键替代）
+    - _phonePutInChest（已被持久化存档键替代）
+
+  代码位置
+    BankMod.cs OnDayStarted (~L982), OnInventoryChanged (~L1293, L1302)
+
+  27.2 Bug 2 — 手机名称在中文版显示英文（Data/Objects 本地化）
+
+  问题现象
+    手机物品在中文游戏版本中显示英文名称 "Cell Phone"，而非中文 "手机"。
+
+  根因分析
+    OnAssetRequested 中 Data/Objects 注入使用 I18n.Get("mod.27") 设置 DisplayName：
+      DisplayName = I18n.Get("mod.27")  // 可能返回默认语言值
+    I18n.Get() 在 AssetRequested 事件中可能因资产缓存机制返回默认语言值，
+    导致 DisplayName 被缓存为英文，后续语言切换无法更新。
+
+  修复方案
+    使用 SDV 1.6 的 [LocalizedText] 令牌语法，让游戏自身的 TokenParser 动态解析本地化文本：
+
+    1. Data/Objects 注入改为令牌引用：
+       DisplayName = "[LocalizedText Strings\\Objects:BankMod.Phone]"
+       Description = "[LocalizedText Strings\\Objects:BankMod.Phone_Desc]"
+
+    2. 新增 Strings/Objects 资产注入：
+       if (e.NameWithoutLocale.IsEquivalentTo("Strings/Objects"))
+       {
+           e.Edit(assets =>
+           {
+               var data = assets.AsDictionary<string, string>();
+               data.Data["BankMod.Phone"] = I18n.Phone_Name();
+               data.Data["BankMod.Phone_Desc"] = I18n.Phone_Description();
+           });
+       }
+
+  技术原理
+    - SDV 1.6 的 TokenParser 会在运行时解析 [LocalizedText ...] 令牌
+    - Strings/Objects 资产由游戏按当前语言加载，每次访问都正确本地化
+    - I18n.Phone_Name() / I18n.Phone_Description() 在 Strings/Objects 注入时调用，
+      此时 SMAPI 的 I18n 系统已正确识别当前语言
+    - Name 字段保持 "BankMod.Phone"（内部标识符，不显示给玩家）
+
+  本地化审计结论
+    - Data/mail 和 Data/Events 也使用 I18n.Get()，但风险较低：
+      信件内容在首次阅读后写入 player.mailReceived，后续不再重新渲染
+      语言切换不影响已读信件
+    - PhoneItem.cs 中 PhoneItem.ObjectData 为残留死代码，不影响运行时
+
+  代码位置
+    BankMod.cs OnAssetRequested Data/Objects (~L377), Strings/Objects (~L390)
+
+  27.3 Bug 3 — 公司名意外回退（路线改名后贷款/迁移中的本地化泄漏）
+
+  问题现象
+    测试员汇报：CC/Joja 路线完成后公司名在某些操作后回退为原名或变为中文子公司名。
+
+  根因分析（两个子问题）
+
+  子问题 A — 债券转移泄漏本地化名称
+    TransferLoansFromDyingCompany 将倒闭公司的贷款转给固定公司时：
+      loan.CompanyName = bestFixed.Name;  // ← 可能是中文子公司名
+    若 CC 路线已完成，bestFixed.Name 可能是 "皮埃尔子公司"（而非原始英文标识符），
+    导致贷款的 CompanyName 被设为中文，写入存档后：
+      - 影响贷款查找逻辑（按 CompanyName 匹配）
+      - 影响借款上限计算（CalcMaxBorrow 按 CompanyName 统计已有贷款）
+      - 跨存档时中文公司名残留
+
+  子问题 B — 已损坏存档无法迁移
+    RouteService.KnownTranslations 字典缺少子公司名称映射：
+      已有映射：  "JojaMart" ↔ "Pierre's General Store" 等原始名称
+      缺失映射：  "皮埃尔子公司" → "JojaMart"
+                  "Joja子公司" → "Pierre's General Store"
+                  "Pierre's Subsidiary" → "JojaMart"
+                  "Joja Subsidiary" → "Pierre's General Store"
+    导致 MigrateLoanNames() 无法识别存档中已存在的中文子公司名称，
+    已损坏的存档数据无法自动修复。
+
+  修复方案
+
+  子问题 A — 使用 OriginalName 替代 Name
+    loan.CompanyName = bestFixed.OriginalName;  // ← 始终为英文原始标识符
+    CompanyDefinition.OriginalName 从 config.json 磁盘文件读取，不受路线改名影响。
+
+  子问题 B — 补全 KnownTranslations 映射
+    RouteService.KnownTranslations 新增 4 条映射：
+      ["皮埃尔子公司"] = "JojaMart"           // CC 路线：Joja → 皮埃尔子公司
+      ["Joja子公司"] = "Pierre's General Store" // Joja 路线：皮埃尔 → Joja子公司
+      ["Pierre's Subsidiary"] = "JojaMart"       // 英文变体
+      ["Joja Subsidiary"] = "Pierre's General Store" // 英文变体
+    MigrateLoanNames 现在可以正确映射所有子公司名称回到 OriginalName。
+
+  路线改名机制回顾
+    - ApplyRouteEffects 在首次加载或路线事件触发时执行
+    - 改名只修改 c.Name（显示名），c.OriginalName 始终保持原始值
+    - _originalCompanyNames 备份恢复机制防止跨存档污染（V3.17）
+    - 存档隔离：LoadFromSave 从 config.json 磁盘读取原始名，先恢复再应用路线改名
+
+  代码位置
+    CompanyManager.cs TransferLoansFromDyingCompany (L976)
+    RouteService.cs KnownTranslations (L212-215)
+
+  27.4 修改文件清单
+
+  | 文件 | 变更 |
+  |------|------|
+  | BankMod.cs | 手机丢失检测：_phoneSeenInInventory/_phonePutInChest → BankMod_PhoneInChest 持久化 |
+  |            | 手机本地化：Data/Objects DisplayName 改为 [LocalizedText] 令牌；新增 Strings/Objects 注入 |
+  |            | 删除 _phoneSeenInInventory 和 _phonePutInChest 字段声明 |
+  | Services/Core/CompanyManager.cs | TransferLoansFromDyingCompany：bestFixed.Name → bestFixed.OriginalName |
+  | Services/Core/RouteService.cs | KnownTranslations 新增 4 条子公司名称映射 |
+
+  27.5 构建状态
+
+    [OK] 通过（0 错误）
+
+
+二十八、Bug 修复补丁（2026-05-29 #2）：公司名泄漏 + 复利/防复利冲突
+
+  28.1 Bug 4 — CC路线完成后"双皮埃尔子公司"（c.Name 中文名泄漏导致匹配失败）
+
+  问题现象
+    测试员汇报：CC路线完成后，某一时刻出现Joja子公司和皮埃尔子公司两个名字，
+    重进存档后变成双皮埃尔子公司。
+
+  根因分析
+    LoadFromSave 和 ApplyRouteEffects 将 c.Name 从 "JojaMart" 修改为 "皮埃尔子公司"。
+    整个代码库使用 c.Name == ca.CompanyName 匹配公司：
+      - CompanyManager.cs SettleDailyInterest: c.Name == ca.CompanyName → 匹配失败
+      - LoanService.cs: c.Name == loan.CompanyName → 匹配失败
+      - BankMod.cs: c.Name == req.CompanyName → 匹配失败
+    而 ca.CompanyName / loan.CompanyName 始终存储英文 OriginalName（如 "JojaMart"），
+    导致公司匹配失败，UI 显示异常。
+
+    更严重的是：GMCM 保存时调用 Helper.WriteConfig(_config)，将中文 c.Name
+    持久化到 config.json。下次加载时 MigrateOriginalNames 虽然会恢复 Name 为
+    OriginalName，但 LoadFromSave 又立即覆盖为中文名，形成循环。
+
+    双皮埃尔子公司的具体成因：当 config.json 被污染后，两个公司的 Name 都可能
+    被错误赋值，或 GetDisplayName 的 fallback 分支 `return company.Name` 返回
+    残留的中文名。
+
+  修复方案
+    彻底停止修改 c.Name。GetDisplayName() 已经根据 OriginalName + 路线状态
+    返回正确的本地化显示名，不需要也不应该修改 c.Name。
+
+    具体修改：
+    - LoadFromSave：删除 c.Name = RouteDisplayNames[...] 赋值，仅保留 boost 标志设置
+    - ApplyRouteEffects：删除 c.Name = RouteDisplayNames[...] 赋值，仅保留 boost 标志设置
+    - c.Name 始终等于 c.OriginalName，确保 c.Name == ca.CompanyName 匹配正确
+    - GMCM WriteConfig 不再有中文 Name 泄漏到 config.json 的风险
+
+  原则
+    c.Name = 稳定标识符（用于匹配、存储、索引）
+    GetDisplayName() = UI 显示名（本地化、路线敏感）
+    两者职责完全分离，互不干扰。
+
+  代码位置
+    RouteService.cs LoadFromSave (L79-90), ApplyRouteEffects (L377-401)
+
+  28.2 Bug 5 — 复利模式与防复利机制冲突（三个子问题）
+
+  问题现象
+    复利模式可能导致防复利机制误触发惩罚，防复利机制可能在复利到期日失效。
+
+  子问题 A — 复利到期日竞态条件（严重）
+
+    OnDayStarted 执行顺序（修复前）：
+      1. CompoundDaysRemaining 倒计时 → CompoundActiveCompany 清空
+      2. SettleDailyInterest → isCompound=false（已清空）→ 复利最后一天无复利利息！
+      3. DetectManualCompoundInterest → continue 守卫失效 → 可能误触发防复利惩罚
+
+    修复：将复利倒计时移到 DetectManualCompoundInterest 之后执行。
+    新执行顺序：
+      1. SettleDailyInterest → CompoundDaysRemaining 仍 > 0 → isCompound=true ✓
+      2. DetectManualCompoundInterest → CompoundActiveCompany 仍非空 → continue 守卫生效 ✓
+      3. CompoundDaysRemaining 倒计时 → 可能清空 CompoundActiveCompany
+         → 若到期，重置滑动窗口 + 清空 ActiveCompany + 启动冷却
+
+  子问题 B — PreviousBaseAmount 在复利期间不更新（严重）
+
+    修复前：DetectManualCompoundInterest 的 continue 跳过了 PreviousBaseAmount 更新。
+    复利到期后，delta = BaseAmount - PreviousBaseAmount 包含整个复利期间的累积增量，
+    可能产生虚假大正增量，触发防复利惩罚。
+
+    修复：在 continue 分支中仍然更新 PreviousBaseAmount：
+      ca.PreviousBaseAmount = ca.BaseAmount;
+      continue;
+
+  子问题 C — 复利到期后滑动窗口残留（中等）
+
+    复利期间的 BaseAmount 变化模式与手动复利不同，但滑动窗口中可能残留
+    旧的增量数据。复利到期后，这些数据可能参与 peak-break 检测。
+
+    修复：复利到期时重置该公司的滑动窗口：
+      RecentPrincipalDeltas = new int[7]
+      WindowDayIndex = 0
+      HasFirstIncrease = false
+      LastPositiveDelta = 0
+      WindowPeak = 0
+      WindowBreakCount = 0
+      PreviousBaseAmount = BaseAmount
+
+  28.3 修改文件清单
+
+  | 文件 | 变更 |
+  |------|------|
+  | Services/Core/RouteService.cs | LoadFromSave: 删除 c.Name = RouteDisplayNames 赋值，仅保留 boost 标志 |
+  |                            | ApplyRouteEffects: 删除 c.Name = RouteDisplayNames 赋值，仅保留 boost 标志 |
+  | Services/Core/CompanyManager.cs | OnDayStarted: 复利倒计时移至 DetectManualCompoundInterest 之后 |
+  |                               | 新增 compoundExpiringToday 快照 + 到期时重置滑动窗口 |
+  |                               | DetectManualCompoundInterest: continue 分支中更新 PreviousBaseAmount |
+
+  28.4 构建状态
+
+    [OK] 通过（0 错误）
+

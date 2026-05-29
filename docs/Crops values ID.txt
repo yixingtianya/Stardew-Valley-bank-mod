@@ -1,0 +1,51 @@
+private static readonly Dictionary<string, string> ItemIdToCode = new()
+{
+    // === 春季作物 ===
+    { "(O)Carrot", "Carrot" },
+    { "(O)400", "Strawberry" },
+    { "(O)24", "Parsnip" },
+    { "(O)188", "Green Bean" },
+    { "(O)192", "Potato" },
+    { "(O)248", "Garlic" },
+    { "(O)271", "Unmilled Rice" },
+    { "(O)190", "Cauliflower" },
+    { "(O)250", "Kale" },
+    { "(O)597", "Blue Jazz" },
+    { "(O)252", "Rhubarb" },
+    { "(O)591", "Tulip" },
+
+    // === 夏季作物 ===
+    { "(O)258", "Blueberry" },
+    { "(O)304", "Hops" },
+    { "(O)260", "Hot Pepper" },
+    { "(O)256", "Tomato" },
+    { "(O)264", "Radish" },
+    { "(O)266", "Red Cabbage" },
+    { "(O)254", "Melon" },
+    { "(O)SummerSquash", "Summer Squash" },
+    { "(O)593", "Summer Spangle" },
+    { "(O)268", "Starfruit" },
+    { "(O)376", "Poppy" },
+
+    // === 秋季作物 ===
+    { "(O)284", "Beet" },
+    { "(O)272", "Eggplant" },
+    { "(O)274", "Artichoke" },
+    { "(O)Broccoli", "Broccoli" },
+    { "(O)398", "Grape" },
+    { "(O)276", "Pumpkin" },
+    { "(O)280", "Yam" },
+    { "(O)300", "Amaranth" },
+    { "(O)278", "Bok Choy" },
+    { "(O)282", "Cranberries" },
+    { "(O)595", "Fairy Rose" },
+
+    // === 冬季作物 ===
+    { "(O)Powdermelon", "Powdermelon" },
+
+    // === 跨季作物 ===
+    { "(O)262", "Wheat" },
+    { "(O)454", "Ancient Fruit" },
+    { "(O)270", "Corn" },
+    { "(O)421", "Sunflower" },
+};

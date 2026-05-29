@@ -1,0 +1,296 @@
+V3.7 测试流程：手动复利检测与惩罚
+====================================
+
+//以下测试全部作废，理由如下：
+发现新bug，计算今日利息的规则是总存款-总利息=本金，本金*利率得到利息。导致取款只取本金，本金为0才取利息，因此复利bug被完全且彻底的解决。唯一的问题在于总存款小于总利息的时候，会出现无利息的情况，为了解决这个问题，需要加一个判断，在本金计算为负的时候，总利息归零，重新计算利息做累加
+
+
+
+
+
+
+前置条件
+--------
+- Mod 已正常启动（V3.7 版本）
+- 至少有一家公司存在且可存款（如 Joja/Pierre 固定公司，或土豆公司等动态公司）
+- 有足够金币进行存取款操作（建议 50 万+）
+- GMCM 中建议关闭天气影响和运气影响以便观察利率变化
+- 存档搜索工具或 SMAPI save-data 导出功能可查看内部数据
+
+═══════════════════════════════════════════════════════════════════
+测试一：正常单利（不触发检测）
+═══════════════════════════════════════════════════════════════════
+
+目标：验证正常存取款不会触发手动复利检测。
+
+Config 参考值：
+  - 检测窗口：7天（固定）
+  - 触发阈值（峰值突破次数）：3次
+  - 惩罚利率折扣：10%
+  - 惩罚持续天数：7天
+
+步骤：
+  1. 选择一家公司（如 Joja 集团），存入固定金额（如 10,000g）
+     打开手机 → 选择公司 → 存款 10000
+
+  2. 不做任何存取款操作，连续睡觉 8 天
+     每天记录利息是否正常（利率不变）
+
+  3. 预期:
+     - 每天利息正常结算
+     - SMAPI 控制台不出现 "[V3.7] Manual compound interest detected" 警告
+     - 利率不降低
+
+  4. 再次存入 10,000g（等额存款），再睡 3 天
+     预期: 等额存款不触发检测（增量未变大）
+
+验证:
+  - SMAPI 日志无 V3.7 相关警告
+  - 利率正常
+  - 存档中 PenaltyDaysRemaining 始终为 0
+
+
+[Dynamic Financial System (Refactored)] Joja超市: 利息 250 g (有效利率 2.500%/天)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 0 items found
+[Dynamic Financial System (Refactored)] New day started
+[Dynamic Financial System (Refactored)] Joja超市: 利息 250 g (有效利率 2.500%/天)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 0 items found
+[Dynamic Financial System (Refactored)] New day started
+[Dynamic Financial System (Refactored)] Joja超市: 利息 250 g (有效利率 2.500%/天)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 0 items found
+[Dynamic Financial System (Refactored)] New day started
+[Dynamic Financial System (Refactored)] Joja超市: 利息 250 g (有效利率 2.500%/天)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 0 items found
+[Dynamic Financial System (Refactored)] New day started
+[Dynamic Financial System (Refactored)] Joja超市: 利息 250 g (有效利率 2.500%/天)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 0 items found
+[Dynamic Financial System (Refactored)] New day started
+[Dynamic Financial System (Refactored)] Joja超市: 利息 250 g (有效利率 2.500%/天)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 0 items found
+[Dynamic Financial System (Refactored)] New day started
+[Dynamic Financial System (Refactored)] Joja超市: 利息 250 g (有效利率 2.500%/天)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 0 items found
+[Dynamic Financial System (Refactored)] New day started
+[Dynamic Financial System (Refactored)] Joja超市: 利息 250 g (有效利率 2.500%/天)
+═══════════════════════════════════════════════════════════════════
+测试二：手动复利触发检测
+═══════════════════════════════════════════════════════════════════
+
+目标：模拟手动复利行为，验证检测算法正确触发。
+
+步骤：
+  1. 选择 Joja 集团，存入 10,000g 作为初始本金
+     记下当前 Joja 存款利率: _____%
+
+  2. 睡觉 → 起床后查看利息（如利息 100g）
+     取款 100g（仅取出利息金额）
+     再将这 100g 存入 Joja（本金增加）
+     睡觉
+
+  3. 第二天：利息变为约 101g（本金增多）
+     取款 101g → 存入 101g
+     睡觉
+
+  4. 第三天：利息变为约 102g
+     取款 102g → 存入 102g
+     睡觉
+
+  5. 继续此操作直到触发检测
+//第一天存款2000
+
+  观察数据点:
+    第1天: 存入 100g (本金增量=100)
+    第2天: 存入 101g (本金增量=101, 101>100 → 第一次变大!峰值=101,计数=1)
+    第3天: 存入 102g (本金增量=102, 102>101 → 峰值=102,计数=2)
+    第4天: 存入 103g (本金增量=103, 103>102 → 峰值=103,计数=3 → 触发!)
+
+  预期: 第4天起床时 SMAPI 控制台输出:
+    [V3.7] Manual compound interest detected for Joja集团! Peak breaks: 3...
+
+  手机查看 Joja 利率: 应降至原利率 × 10%
+
+验证:
+  - 第 4 天触发惩罚警告
+  - 利率降至原来的 10%
+  - 存档中 PenaltyDaysRemaining = 7（第4天起床后递减为6）
+
+═══════════════════════════════════════════════════════════════════
+测试三：惩罚期利率验证
+═══════════════════════════════════════════════════════════════════
+
+目标：验证惩罚期内利率正确降低，结束后恢复。
+
+步骤：
+  1. 接续测试二（已触发惩罚后）
+
+  2. 第1天惩罚（触发当天起床后）：
+     手机查看 Joja 利率 → 应为基础利率 × 10%
+     记下利率: _____%
+
+  3. 不做存取款，连续睡觉 7 天
+     每天查看手机利率变化
+
+  4. 第7天起床后（惩罚期结束）：
+     手机查看 Joja 利率 → 应恢复原利率
+     记下利率: _____%
+
+  观察数据点:
+    惩罚前利率: _____%
+    惩罚期利率: _____% (= 前值 × 10%)
+    惩罚结束利率: _____% (= 惩罚前利率)
+
+验证:
+  - 惩罚期内存款利率降至 10%（贷款不受影响）
+  - 惩罚不影响其他公司利率
+  - 惩罚期结束后利率恢复正常
+  - SMAPI 日志中 PenaltyDaysRemaining 逐天递减
+
+═══════════════════════════════════════════════════════════════════
+测试四：惩罚不影响其他公司
+═══════════════════════════════════════════════════════════════════
+
+目标：验证一家公司触发惩罚不会影响其他公司。
+
+步骤：
+  1. 同时向 Joja 和 Pierre 两家公司存入本金
+  2. 仅在 Joja 进行手动复利操作
+  3. 触发 Joja 惩罚后，查看 Pierre 利率
+
+预期:
+  - Joja 利率降低（惩罚中）
+  - Pierre 利率不受影响
+
+验证:
+  - 惩罚是 per-company 的
+  - 各公司独立追踪
+
+═══════════════════════════════════════════════════════════════════
+测试五：滑动窗口重置
+═══════════════════════════════════════════════════════════════════
+
+目标：验证 7天窗口期满后正确重置状态。
+
+步骤：
+  1. 先做 3 天递增存款（触发条件但不达到 3 次峰值突破）
+     如: Day1=100, Day2=150(第1次突破), Day3=200(第2次突破)
+     此时 breakCount=2，未触发惩罚
+
+  2. 不做任何操作，等待 7 天窗口滚过
+     即连续睡觉 7 天（不做存取款）
+
+  3. 再次尝试递增存款
+
+预期:
+  - 窗口重置后 HasFirstIncrease=false, WindowPeak=0, WindowBreakCount=0
+  - 之前的 2 次突破不累积到新窗口
+
+验证:
+  - 存档中窗口状态在 7 天后正确清零
+  - 新窗口重新开始计数
+
+═══════════════════════════════════════════════════════════════════
+测试六：取款不触发检测
+═══════════════════════════════════════════════════════════════════
+
+目标：验证纯取款操作（不存回）不会触发检测。
+
+步骤：
+  1. 存入 50,000g 到 Joja
+  2. 每天取款 5,000g（不存回），连续 5 天
+     每天本金减少 5,000g
+
+预期:
+  - 本金增量为负值（不计入窗口）
+  - 不触发检测
+
+验证:
+  - SMAPI 无 V3.7 警告
+  - 窗口计数无变化
+
+═══════════════════════════════════════════════════════════════════
+测试七：旧存档兼容性
+═══════════════════════════════════════════════════════════════════
+
+目标：V3.6 旧存档（无 V3.7 字段）正常加载不报错。
+
+步骤：
+  1. 使用 V3.6 的存档（CompanyAccount 无 V3.7 字段）
+  2. 启动 Mod → 正常进入游戏
+  3. 打开手机 → 正常显示各公司
+  4. 进行一次存款和取款操作 → 正常
+  5. 睡觉 → 利息正常结算
+
+验证:
+  - SMAPI 无报错
+  - 旧 CompanyAccount 字段初始化为默认值（数组为空/数值为0）
+  - 不影响正常存取款和利息结算
+
+═══════════════════════════════════════════════════════════════════
+快速测试指令备忘
+═══════════════════════════════════════════════════════════════════
+
+| 指令 | 作用 |
+|------|------|
+| player_add money 100000 | 加 10 万金币 |
+| player_setmoney 50000 | 设置金币为 5 万 |
+| spawn_phone | 重新获取手机 |
+| reset_phone_flag | 重置手机标记位 |
+
+═══════════════════════════════════════════════════════════════════
+验证数据速查
+═══════════════════════════════════════════════════════════════════
+
+存档路径: save → CustomData → smapi/mod-data/bankmod.../bankmod_account_data
+
+CompanyAccount V3.7 字段:
+  "RecentPrincipalDeltas": [0,0,0,0,0,0,0]  — 7天本金增量窗口
+  "WindowDayIndex": N                        — 窗口写入位置
+  "HasFirstIncrease": false                   — 是否已触发第一次变大
+  "LastPositiveDelta": 0                      — 最近正增量
+  "WindowPeak": 0                             — 窗口内峰值
+  "WindowBreakCount": 0                       — 峰值突破次数
+  "PenaltyDaysRemaining": 0                   — 惩罚剩余天数
+  "PreviousBaseAmount": N                     — 前日本金
+
+InterestCalculationContext 新增:
+  "IsPenaltyPeriod": false                    — 利率计算时是否处于惩罚期
+
+SMAPI 日志关键字:
+  "[V3.7] Manual compound interest detected"  — 检测触发
+  "Peak breaks: N"                            — 突破次数
+
+═══════════════════════════════════════════════════════════════════
+建议测试顺序
+═══════════════════════════════════════════════════════════════════
+
+  1. 测试七 → 验证旧存档兼容（安全第一）
+  2. 测试一 → 验证正常单利不误触发
+  3. 测试二 → 验证手动复利正确触发（核心）
+  4. 测试三 → 验证惩罚期和恢复
+  5. 测试四 → 验证惩罚隔离性
+  6. 测试六 → 验证取款不误触发
+  7. 测试五 → 验证窗口重置
+
+═══════════════════════════════════════════════════════════════════
+关键修改文件清单（V3.7）
+═══════════════════════════════════════════════════════════════════
+
+| 文件 | 变更内容 |
+|------|----------|
+| Data/BankAccountData.cs | CompanyAccount +8 V3.7字段 |
+| Domain/InterestCalculationContext.cs | +IsPenaltyPeriod |
+| Services/Core/CompanyManager.cs | +DetectManualCompoundInterest(), 调用位置, context传参 |
+| Services/Core/Interest/FixedCompanyInterestStrategy.cs | 存款利率惩罚 ×0.10 |
+| Services/Core/Interest/DynamicCompanyInterestStrategy.cs | 存款利率惩罚 ×0.10 |
+| UI/BankMenu.cs | BuildContext +IsPenaltyPeriod |
+
+═══════════════════════════════════════════════════════════════════
+设计原则（备忘）
+═══════════════════════════════════════════════════════════════════
+
+- 不追踪资金来源（只看本金增量）
+- 不限制存取款（只降利率）
+- 不跨公司比对（每家独立）
+- 不预设基准（杠杆不会自动成为护身符）
+- 仅影响存款利率，贷款利率不受影响
+- 计算顺序：base → +consecutive/decay → -suppression → ×luck → +weather → clamp → ×penalty(0.10)

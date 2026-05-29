@@ -1,0 +1,371 @@
+
+代码实现速查索引
+
+使用说明：执行任何需求步骤时，先查此表，找到对应的架构约束、接口定义和内容来源。
+
+---
+
+阶段一：基础框架与手机道具（步骤 1.1-1.5）
+
+查什么 去哪里看
+项目结构 架构总.docx → 第七节 项目结构定稿
+SMAPI 加载规范 架构 §7 manifest.json
+手机物品注册 demand.txt §1.2（物品属性：不可出售）
+UI 框架 demand.txt §1.5（图形化对话UI）
+
+联机主/客机判断 架构总.txt → V3.3 补丁 §1.2（Context.IsMainPlayer）
+联机消息类型定义 架构总.txt → V3.3 补丁 §1.4
+OnDayStarted 客机跳过 架构总.txt → V3.3 补丁 §1.5
+
+代码草案位置：DynamicFinanceMod/src/ModEntry.cs、UI/BankAppUI.cs
+
+---
+
+阶段二：邮件补发与基础账户数据（步骤 2.1-2.4）
+
+查什么 去哪里看
+存档数据结构 demand.txt §2.3（存款余额、贷款本金、累计未还利息）
+手机检测逻辑 demand.txt §2.1（存档变量标记）
+邮件配置 demand.txt §2.2（发件人、主题、正文、附件）
+
+架构约束：账户数据需按玩家 ID 独立存储，使用 SMAPI 存档数据接口。
+
+代码草案位置：Data/PlayerAccount.cs、Services/MailService.cs
+
+---
+
+阶段三：固定公司存款功能（步骤 3.1-3.4）
+
+查什么 去哪里看
+固定公司利率 value2.docx §1.1（皮埃尔 1.5%/2.5%，Joja 2.5%/4.0%）
+存款/贷款上限 value2.docx §1.1（皮埃尔 100万/20万，Joja 200万/30万）
+公司数据模型 架构总.docx §四 模块职责定稿 → Company 模块
+存款上限计算 架构总.docx §3.4、§9.3 IDepositLimitProvider
+依赖纯洁性原则 架构总.docx §3.1（Company → CompanyStatus → Interest）
+
+架构约束：固定公司始终单利（value2.docx §2），计息方式不可变。
+
+代码草案位置：Services.Core/CompanyManager.cs、Infrastructure/DepositLimitProvider.cs
+
+---
+
+阶段四：基础利率与计息（步骤 4.1-4.5）
+
+查什么 去哪里看
+利率计算接口 架构总.docx §9.2 IInterestCalculator
+策略模式实现 架构总.docx §9.2 代码片段（FixedCompanyInterestStrategy）
+运气/天气映射 架构总.docx §10.3 利率浮动参数（运气强度系数 2.5、连续售卖加成等）
+负利率 架构总.docx §10.3（允许范围、下限 -2.0%）
+单利/复利规则 value2.docx §2（固定公司单利锁定，动态公司复利）
+
+架构约束：
+
+· CalculateDepositRate 必须接收 CompanyStatus status 参数（§3.1）
+· Interest 模块严禁内部调用 ICompanyManager（致命级）
+· 固定公司 IsInCompoundInterestCooldown 始终返回 true（永久单利）
+
+代码草案位置：Services.Core/Interest/FixedCompanyInterestStrategy.cs、Services.Core/Interest/DynamicCompanyInterestStrategy.cs
+
+---
+
+阶段五：贷款基础功能（步骤 5.1-5.5）
+
+查什么 去哪里看
+贷款数据模型 demand.txt §5.1（本金、日利率、累计未还利息、还款周期、下次还款日）
+还款周期 value2.docx §1.1（7天/14天，14天折扣 0.5%）
+还款顺序 demand.txt §5.3（逾期利息 → 正常利息 → 本金）
+到期扣款 demand.txt §5.4（应还总额 = 本金×利率×周期天数 + 本金）
+每日计息 demand.txt §5.5（利息 = 本金×日利率，累加到未还利息）
+
+架构约束：贷款日利率独立于存款利率，受运气/天气影响（复用阶段四逻辑）。
+
+代码草案位置：Services.Core/LoanService.cs
+
+---
+
+阶段六：动态公司——诞生与基础运营（步骤 6.1-6.4）
+
+查什么 去哪里看
+作物等效支出公式 value2.docx §1.2（等效支出 = 作物售价÷出种率×单次出种数）
+作物利率与燃料速查 Crops values.txt（完整数据表，R分区含存款/贷款利率/Y/D_base/Smax）
+存款系数规则 架构总.txt → V3.5 patch5 补丁二（R>20%: R×0.5, R≤20%: 不打折, 贷款×1.5，无线性衰减）
+咖啡豆排除 架构总.txt → V3.5 补丁一（不生成动态公司）
+贷款下限锁定 架构总.txt → V3.5 patch5 补丁五（贷款利率下限+1%硬锁定）
+利率折扣规则实现位置：Services/Core/Interest/DynamicCompanyInterestStrategy.cs（存款利率三段式折扣 + 贷款利率下限钳位）
+生成所需出售量 value2.docx §7（50个，可配 10-50）
+新公司保护期 value2.docx §7（14天）
+总席位限制 value2.docx §7（4个，单季新增上限 2个）
+公司生成接口 架构总.docx §9.1 ICompanyManager.OnDayStarted()
+倒闭冷却封锁 架构总.docx §3.5、§9.1 IsCropOnBankruptcyCooldown(cropId)
+燃料机制 value2.docx §8（每日需求 = 种植株数×基础维持系数×状态系数）
+
+架构约束：
+
+· 公司生成前必须调用 IsCropOnBankruptcyCooldown（高优先级）
+· 状态系数：繁荣×1.0、稳定×0.8、饥饿×0.5、濒死×0.3
+
+燃料系统接口 架构总.txt → V3.3 补丁 §3.5 IFuelService 追加方法
+燃料常量 架构总.txt → V3.3 补丁 §3.5 FuelConstants
+燃料库存内部单位 架构总.txt → V3.3 补丁 §3.2（1 标准作物 = 10 FP）
+燃料变动规则 架构总.txt → V3.3 补丁 §3.3（出货+10FP，购买-5FP）
+燃料阈值 FP 换算 架构总.txt → V3.3 补丁 §3.6
+资产池与取款限制 架构总.txt → V3.3.1 补丁 §二（资产池=有效贷款上限-已贷出未还本金）
+
+代码草案位置：Services.Core/CompanyManager.cs、Services.Core/FuelService.cs、Services.Core/AssetPoolService.cs
+
+---
+
+阶段七：动态公司利率波动（步骤 7.1-7.4）
+
+查什么 去哪里看
+连续售卖加成 架构总.docx §10.3（存款 +0.5%/天 上限 +5.0%，贷款 +1.0%/天 上限 +10.0%）
+停售衰减 架构总.docx §10.3（存款 -0.5%/天，贷款 -1.0%/天）
+打压效果 架构总.docx §10.3（最大跌幅 -2.0%/50+个，持续 5天，最大 3层）
+MarketContext 值对象 架构总.docx §9.2（运气值、天气、连续售卖天数、打压叠层/持续天数）
+利率计算顺序 demand.txt §7.4（基础→连续售卖→打压→运气倍率→天气→钳位）
+存款系数衰减 value2.docx §1.2（R>20%: ×0.5, 10-20%: 线性, <10%: ×1）
+
+架构约束：
+
+· 利率计算必须接收 CompanyStatus 参数（依赖纯洁性）
+· 固定公司忽略 status，但仍需接收以保持接口统一
+· DynamicCompanyInterestStrategy 应用状态乘数和复利冷却逻辑
+
+代码草案位置：Services.Core/Interest/DynamicCompanyInterestStrategy.cs、Domain/ValueObjects/MarketContext.cs
+
+---
+
+阶段八：利息欠债、本金欠债与破产保护（步骤 8.1-8.4）
+
+查什么 去哪里看
+破产状态机 架构总.docx §11.3 破产保护状态机（Mermaid图）
+破产规则 value2.docx §5（利息欠债→本金欠债→破产的层级）
+IBankruptcyHandler 架构总.docx §9.4（CheckBankruptcyStatus、ApplyIncomeDeduction、注资救市）
+宽限期/罚息 架构总.docx §10.6（本金宽限期 1天，罚息 +20%，破产收入扣除 50%）
+利息欠债计息 value2.docx §2（债务计息方式：单利，利息欠债永不滚入本金）
+强制扣款顺序 demand.txt §8.3（低利率账户优先→逾期利息→正常利息→本金）
+
+架构约束：
+
+· 破产状态：所有利息停止（0%），禁止借款/取款
+· 收入扣除比例 50%（可配 20%-80%）
+· 债务计息方式：单利（value2 §2）
+
+代码草案位置：Services.Core/BankruptcyHandler.cs、Services.Core/LoanService.cs
+
+---
+
+阶段九：公司倒闭与债券转移（步骤 9.1-9.5）
+
+查什么 去哪里看
+公司状态流转 架构总.docx §11.1 公司状态流转（Mermaid图）
+倒闭条件 value2.docx §3.1（连续14天无出货/利率持续5天为负/存款<5,000g）
+濒死保护期 value2.docx §3.3（7天重组期，倒闭概率冻结，利率归零，禁止借贷）
+债券转移 value2.docx §5（卖给贷款利率较高的固定公司，利率×50%，周期重置28天）
+倒闭清算 value2.docx §5（存款清零，已转移贷款仍须偿还）
+倒闭冷却封锁 架构总.docx §3.5（同作物下一完整季节无法重新生成）
+贷款上限状态乘数 架构总.txt → V3.3.1 补丁 §二（饥饿×0.6，濒死×0.3）
+资产池与取款限制 架构总.txt → V3.3.1 补丁 §二（资产池=有效贷款上限-已贷出未还本金）
+入股救市 架构总.txt → V3.3.1 补丁 §三（仅濒死期，上限=原始贷款上限×50%，翻倍进存款）
+复活稳定性 架构总.txt → V3.3.1 补丁 §四（满足率重置100%，稳定期，贷款上限恢复×1.0）
+饥饿期禁止注资 架构总.txt → V3.3.1 补丁 §七（防套利闭环）
+倒闭存款返还 架构总.txt → V3.3.2 补丁 §一（繁荣80%/稳定50%/饥饿0%/濒死0%，阶梯可配）
+阶梯校验规则 架构总.txt → V3.3.2 补丁 §二（稳定≤繁荣，饥饿濒死固定0%，强制生效）
+作物倒闭冷却 架构总.docx §3.5、§9.1 IsCropOnBankruptcyCooldown
+
+架构约束：
+
+· 公司倒闭冷却期：1个完整季节
+· 复利冷却在公司倒闭后仍继续计时
+
+代码草案位置：Services.Core/CompanyManager.cs、Services.Core/BankruptcyHandler.cs
+
+---
+
+阶段十：电视金融频道（步骤 10.1-10.4）
+
+查什么 去哪里看
+IMessageScheduler 架构总.docx §9.5（GetTodaysNews、OnDayStarted）
+金融频道参数 架构总.docx §10.5（每季假消息 2-3条、真消息 1条、真消息当天倒闭概率 50%）
+消息规则 value2.docx §4（真假消息机制、三幕剧节奏、休闲模式）
+频道内容设计 TV.txt（完整财经新闻文案，按情景触发）
+
+架构约束：假消息弹概率是真消息的2倍；消息持续时间仅当天。
+
+代码草案位置：Services.Core/MessageScheduler.cs、UI/TVChannelUI.cs
+
+---
+
+阶段十一：献祭与Joja路线联动（步骤 11.1-11.2）
+
+查什么 去哪里看
+献祭进度影响 demand.txt §11.1（完成包数→利率调整）
+Joja会员影响 demand.txt §11.2（会员→Joja利率上升，皮埃尔下降）
+献祭与会员互斥 demand.txt §11.2（只能走一条路线）
+
+注：value2.docx 未详细覆盖献祭数值，以 demand.txt 和 value.txt 中的献祭参数表为参考。
+
+代码草案位置：Services.Core/InterestCalculator.cs（接收外部事件调整利率）、Services/CommunityCenterTracker.cs
+
+---
+
+阶段十二：全局借款上限与资产绑定（步骤 12.1-12.4）
+
+查什么 去哪里看
+ICreditLimitService 架构总.docx §9.6（CalculateNetWorth、CalculateGlobalBorrowingLimit、GetAvailableCreditLimit）
+净资产公式 架构总.docx §9.6（现金+所有存款-所有贷款含逾期利息）
+借款系数 架构总.docx §10.7（杠杆系数 200%，硬封顶 500,000g）
+额度分配 架构总.docx §10.7（固定/动态 60%/40%）
+利率健康系数 架构总.docx §10.7（≥基础→100%，>0但<基础→10%+90%×(当前/基础)，≤0→0%）
+最终可借 架构总.docx §9.6（取全局上限/基础额度/健康额度三者最小值）
+
+架构约束：借款前实时计算净资产，本金欠债宽限期/破产状态借款锁死。
+
+代码草案位置：Services.Core/CreditLimitService.cs
+
+---
+
+阶段十三：多人模式完整实现（步骤 13.1-13.4）【V3.3 新增】
+
+查什么 去哪里看
+联机架构完整约束 架构总.txt → V3.3 补丁 §1（主机权威）+ §2（数据一致性）
+客机操作消息协议 架构总.txt → V3.3 补丁 §1.4（BankOperationRequest / BankDataSync）
+操作锁机制 架构总.txt → V3.3 补丁 §2.1
+客机功能白名单 架构总.txt → V3.3 补丁 §2.3
+日结算快照同步 架构总.txt → V3.3 补丁 §1.5
+联机财产分配（分家/合家） 架构总.txt → 勘误六（SplitBankAccountsAmongPlayers）
+
+代码草案位置：ModEntry.cs、Messages/BankOperationRequest.cs、Messages/BankDataSync.cs、UI/TransferMenu.cs
+
+---
+
+阶段十五：欠债/破产 NPC 对话（步骤 15.1-15.3）
+
+查什么 去哪里看
+触发机制 demand.txt §15（欠债基础概率 15%、破产切换对话池）
+好感度分级 demand.txt §15（0-3心/4-7心/8-10心）
+覆盖NPC列表 demand.txt §15.1（22位NPC）
+欠债对话全文 dialog.txt §一（按NPC、好感度分级）
+破产对话+赠礼 dialog.txt §二（含赠礼映射表，24位NPC）
+还清祝贺对话 dialog.txt §三（含通用+特殊台词）
+赠礼触发逻辑 demand.txt §15.2（首对话触发、背包满则邮件、每人每轮一次）
+
+架构约束：对话文本在本地化文件中可维护，不硬编码。
+
+代码草案位置：Services/DialogCoordinator.cs、Data/NPCDialogData.json
+
+---
+
+全局日结算流程（架构 §五）
+
+顺序 操作 对应接口/模块
+1 捕获时间、天气、运气 GameAdapter
+2 更新燃料需求→更新公司状态 FuelService
+3 检测倒闭条件→触发濒危/倒闭 CompanyManager
+4 CompanyManager传入公司状态 ICompanyManager.GetStatus()
+5 计算日利率（应用状态乘数） IInterestCalculator.CalculateDepositRate()
+6 扣息、到期扣款、宽限期处理 LoanService.DailyTick()
+7 破产状态检查 IBankruptcyHandler.CheckBankruptcyStatus()
+8 检查复利冷却→强制单利结算 IInterestCalculator.IsInCompoundInterestCooldown()
+9 应用状态乘数计算利息 AccountService.CreditInterest()
+10 检查新公司生成，前置校验冷却 ICompanyManager.IsCropOnBankruptcyCooldown()
+11 持久化所有变更数据 SaveData
+12 触发UI刷新事件 UI Events
+12a 【V3.3】主机广播全量快照给客机 BankSnapshot 消息
+12b 【V3.3】客机接收快照后刷新 UI OnModMessageReceived
+
+---
+
+核心接口速查
+
+接口 位置 关键方法
+ICompanyManager 架构 §9.1 GetStatus, OnDayStarted, IsCropOnBankruptcyCooldown, IsCompoundInterestCoolingDown
+IInterestCalculator 架构 §9.2 CalculateDepositRate(status), CalculateLoanRate(status), IsInCompoundInterestCooldown
+IDepositLimitProvider 架构 §9.3 GetDepositLimit(companyId)
+IBankruptcyHandler 架构 §9.4 CheckBankruptcyStatus, ApplyIncomeDeduction, InjectRescueFunds
+IMessageScheduler 架构 §9.5 GetTodaysNews, OnDayStarted
+ICreditLimitService 架构 §9.6 CalculateNetWorth, CalculateGlobalBorrowingLimit, GetAvailableCreditLimit
+ISeasonalFruitMarket 架构 §9.7 GetAvailableFruits, PurchaseFruit, IsPurchaseWindowActive
+
+---
+
+关键常量与枚举
+
+枚举/常量 位置
+CompanyStatus (Prosperous/Stable/Hungry/Dying/Restructuring/Retired/Bankrupted) 架构 §9.2
+MarketContext (LuckValue, Weather, ConsecutiveShippingDays, SuppressionStacks, SuppressionRemainingDays) 架构 §9.2
+NewsNarrativeType (FalseCrisis/RealCrisis/MarketCommentary/CompanySpotlight) 架构 §9.5
+DailyNewsReport (IsRealNews, TargetCompanyId, NarrativeType, TemporaryBankruptcyRisk) 架构 §9.5
+
+---
+
+状态机速查
+
+状态机 架构位置 关键转换
+公司状态流转 §11.1 Mermaid图 Stable↔Prosperous/Hungry→Dying→Restructuring→Bankrupted→Cooldown
+复利冷却状态机 §11.2 Mermaid图 Active→CoolingDown(112天)→Active / 公司倒闭→CooldownOnBankruptcy
+破产保护状态机 §11.3 Mermaid图 Normal→InterestArrears→Bankruptcy / Normal→PrincipalDefault→GracePeriod→Bankruptcy
+季节过渡状态机 §11.4 Mermaid图 Active→Observing→Retired/Transformed/Surviving/Liquidated
+
+---
+
+参数配置速查（锚定 value2.docx §9）
+
+参数类别 关键值
+固定公司利率 皮存款 1.5%、贷 2.5%；J存款 2.5%、贷 4.0%（单利锁定）
+动态公司复利 持续 10-21天，冷却 112天（1自然年），债务计息单利
+状态利率乘数 繁荣 ×1.2，稳定 ×0.9，饥饿 ×0.7，濒死 ×0.4
+繁荣年倒闭风险 默认 30%（可选 15%/22%/40%/50%）
+濒死保护期 7天（倒闭概率冻结，利率归零）
+公司席位 总上限 4，单季新增上限 2
+倒闭冷却 1个完整季节
+借款杠杆 200%，硬封顶 500,000g
+破产扣除 出货收入 50%强制还债
+状态贷款上限乘数 饥饿×0.6，濒死×0.3（V3.3.1）
+倒闭返还比例 繁荣80%/稳定50%/饥饿0%/濒死0%（V3.3.2，阶梯可配）
+燃料 FP 1 标准作物 = 10 FP，出货+10FP，购买-5FP（V3.3）
+
+---
+
+测试用例速查（架构 §八）
+
+模块 关键测试
+ICompanyManager 验证 IsCropOnBankruptcyCooldown 在对应季节内返回 true；复利冷却 112天后自动结束
+IInterestCalculator 传入不同 CompanyStatus 验证乘数；冷却期内强制单利
+IDepositLimitProvider 模拟繁荣/饥饿/濒死状态，验证存款上限多元修正
+
+---
+
+代码审查致命级清单（架构 §12.2）
+
+校验项 严重程度
+Interest 模块未反向调用 ICompanyManager 致命
+CalculateDepositRate 接收 CompanyStatus 参数 致命
+复利冷却期内强制单利结算 高
+公司生成前调用 IsCropOnBankruptcyCooldown 高
+DepositLimitProvider 显式依赖 ICompanyManager 高
+状态乘数正确应用（×1.2/0.9/0.7/0.4） 高
+存款上限多元修正（+20%/半锁/清空） 中
+濒死重组期利率归零、倒闭概率冻结 中
+【V3.3】客机 OnDayStarted 立即 return 致命
+【V3.3】所有金融操作仅在主机端执行 致命
+【V3.3】燃料库存内部使用 int（FP），UI 层 ÷10 致命
+【V3.3】出货/购买燃料变动遵循非对称规则（+10/-5） 致命
+【V3.3.1】有效贷款上限 = 原始贷款上限 × 状态乘数 致命
+【V3.3.1】取款金额不超过资产池余额（饥饿/濒死期） 致命
+【V3.3.1】入股救市仅濒死期可用，饥饿期禁止 致命
+【V3.3.1】复活后燃料满足率强制设为100%，贷款上限恢复×1.0 高
+【V3.3.2】返还比例阶梯校验强制生效（稳定期不可超过繁荣期） 致命
+【V3.3.2】饥饿期和濒死期返还比例强制为0%，忽略任何配置覆盖 致命
+【V3.3.2】返还计算仅针对存款本金，不含已计利息 高
+
+---
+
+使用流程示例：
+
+1. 开发到“步骤 6.3 触发新公司生成”
+2. 查此索引 → 看到“架构约束：公司生成前必须调用 IsCropOnBankruptcyCooldown（高优先级）”
+3. 同时查看 value2.docx §7（席位限制、保护期）、架构 §3.5（作物倒闭冷却封锁）、架构 §9.1（ICompanyManager.IsCropOnBankruptcyCooldown）
+4. 在 CompanyManager.OnDayStarted() 中添加前置校验
+
+---
