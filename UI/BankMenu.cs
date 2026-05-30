@@ -495,9 +495,17 @@ internal class BankMenu : IClickableMenu
                 }
                 else
                 {
-                    dueColor = daysLeft <= 2 ? Color.DarkOrange : Color.DimGray;
-                    int dueDayOfSeason = ((loan.DueDay - 1) % 28) + 1;
-                    dueStr = I18n.Get("uib.32", new { daysLeft, dayOfSeason = ((loan.DueDay - 1) % 28) + 1 });
+                    // Guard: if daysLeft < 0 but not yet in default, show "overdue" instead of negative number
+                    if (daysLeft < 0)
+                    {
+                        dueColor = Color.Red;
+                        dueStr = I18n.Get("uib.31", new { days = 0 });
+                    }
+                    else
+                    {
+                        dueColor = daysLeft <= 2 ? Color.DarkOrange : Color.DimGray;
+                        dueStr = I18n.Get("uib.32", new { daysLeft, dayOfSeason = ((loan.DueDay - 1) % 28) + 1 });
+                    }
                 }
                 DrawInfoLine(b, dueStr, infoX + 20, loanY + lineH * nextLine, dueColor);
                 nextLine++;
@@ -606,8 +614,16 @@ internal class BankMenu : IClickableMenu
                     else
                     {
                         int dd2 = ((l.DueDay - 1) % 28) + 1;
-                        header = I18n.Get("uib.40", new { period = l.RepaymentPeriodDays, overdueDays = dd2, remainingDays = daysLeft });
-                        headerColor = daysLeft <= 2 ? Color.Orange : Color.Gold;
+                        if (daysLeft < 0)
+                        {
+                            header = I18n.Get("uib.39", new { period = l.RepaymentPeriodDays, overdueDays = dd2, graceDays = 0 });
+                            headerColor = Color.Red;
+                        }
+                        else
+                        {
+                            header = I18n.Get("uib.40", new { period = l.RepaymentPeriodDays, overdueDays = dd2, remainingDays = daysLeft });
+                            headerColor = daysLeft <= 2 ? Color.Orange : Color.Gold;
+                        }
                     }
                     DrawInfoLine(b, header, infoX + 8, ey + (_isChinese ? 6 : btnH + 8), headerColor);
 

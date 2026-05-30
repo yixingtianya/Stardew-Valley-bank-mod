@@ -303,8 +303,9 @@ public class LoanService : ILoanService
             }
 
             // === Stage 8.3: Due-date handling for all loans ===
+            // Use <= to catch loans that slipped past their due day (e.g. player skipped a day)
             bool justEnteredDefault = false;
-            if (loan.DueDay == today && !loan.IsInDefault)
+            if (loan.DueDay <= today && !loan.IsInDefault)
             {
                 int totalOwed = loan.Principal + loan.AccumulatedInterest + loan.OverdueInterest;
 
