@@ -35,6 +35,14 @@ internal class InterestLogMenu : IClickableMenu
     // Hover
     private bool _hoverBack;
 
+    // Dynamic layout cache (recalculated each frame for i18n adaptability)
+    private int _colCompany;
+    private int _colTotal;
+    private int _colDetail;
+    private int _colDay;
+    private int _colRate;
+    private int _colInterest;
+
     public InterestLogMenu(BankAccountData account, ModConfig config, IModHelper helper, ModServices services)
         : base(
             Game1.uiViewport.Width / 2 - WindowWidth / 2,
@@ -69,26 +77,92 @@ internal class InterestLogMenu : IClickableMenu
         drawMouse(b);
     }
 
+    /// <summary>Calculate column positions dynamically for the company list view based on text widths.</summary>
+    private void CalculateListColumns()
+    {
+        int pad = 40;
+        _colCompany = xPositionOnScreen + pad;
+
+        // Measure header text widths to determine column positions
+        string totalHeaderText = I18n.Get("uilog.4");
+        Vector2 totalHeaderSize = Game1.smallFont.MeasureString(totalHeaderText);
+        string detailText = I18n.Get("uilog.5");
+        Vector2 detailSize = Game1.tinyFont.MeasureString(detailText);
+
+        int detailBtnWidth = Math.Max(80, (int)detailSize.X + 20);
+        _colDetail = xPositionOnScreen + width - pad - detailBtnWidth;
+
+        // Total column: right-aligned before detail button
+        _colTotal = _colDetail - (int)totalHeaderSize.X - 30;
+
+        // Ensure minimum spacing
+        int minCompanyWidth = (int)Game1.smallFont.MeasureString(I18n.Get("uilog.3")).X + 40;
+        if (_colTotal - _colCompany < minCompanyWidth + 40)
+            _colTotal = _colCompany + minCompanyWidth + 40;
+    }
+
+    /// <summary>Calculate column positions dynamically for the company detail view based on text widths.</summary>
+    private void CalculateDetailColumns()
+    {
+        int pad = 40;
+        _colDay = xPositionOnScreen + pad;
+
+        // Measure header widths
+        string rateHeader = I18n.Get("uilog.9");
+        Vector2 rateHeaderSize = Game1.smallFont.MeasureString(rateHeader);
+        string interestHeader = I18n.Get("uilog.10");
+        Vector2 interestHeaderSize = Game1.smallFont.MeasureString(interestHeader);
+
+        // Distribute remaining space evenly
+        int usedWidth = pad;
+        int dayColWidth = 120;
+        int rateColWidth = (int)rateHeaderSize.X + 60;
+        int interestColWidth = (int)interestHeaderSize.X + 80;
+        int availableWidth = width - pad * 2;
+
+        // Scale proportionally if too wide
+        int totalNeeded = dayColWidth + rateColWidth + interestColWidth;
+        if (totalNeeded > availableWidth)
+        {
+            float scale = (float)availableWidth / totalNeeded;
+            dayColWidth = (int)(dayColWidth * scale);
+            rateColWidth = (int)(rateColWidth * scale);
+            interestColWidth = (int)(interestColWidth * scale);
+        }
+
+        _colDay = xPositionOnScreen + pad;
+        _colRate = _colDay + dayColWidth;
+        _colInterest = _colRate + rateColWidth;
+    }
+
     private void DrawCompanyList(SpriteBatch b)
     {
+        CalculateListColumns();
+
         // Title
         string title = I18n.Get("uilog.2");
         DrawCenteredText(b, title, Game1.dialogueFont, yPositionOnScreen + 25);
 
         b.Draw(Game1.staminaRect, new Rectangle(xPositionOnScreen + 30, yPositionOnScreen + 65, width - 60, 2), Color.Gray);
 
+        // Empty state
+        var companies = GetCompanySummaries();
+        if (companies.Count == 0)
+        {
+            string emptyMsg = I18n.Get("uilog.14");
+            Vector2 emptySize = Game1.smallFont.MeasureString(emptyMsg);
+            Utility.drawTextWithShadow(b, emptyMsg, Game1.smallFont,
+                new Vector2(xPositionOnScreen + (width - emptySize.X) / 2, yPositionOnScreen + height / 2 - 10), Color.Gray);
+            return;
+        }
+
         // Column headers
         int headerY = yPositionOnScreen + 75;
-        int colCompany = xPositionOnScreen + 40;
-        int colTotal = xPositionOnScreen + 320;
-        int colDetail = xPositionOnScreen + width - 130;
-
-        Utility.drawTextWithShadow(b, I18n.Get("uilog.3"), Game1.smallFont, new Vector2(colCompany, headerY), Color.DarkSlateGray);
-        Utility.drawTextWithShadow(b, I18n.Get("uilog.4"), Game1.smallFont, new Vector2(colTotal, headerY), Color.DarkSlateGray);
+        Utility.drawTextWithShadow(b, I18n.Get("uilog.3"), Game1.smallFont, new Vector2(_colCompany, headerY), Color.DarkSlateGray);
+        Utility.drawTextWithShadow(b, I18n.Get("uilog.4"), Game1.smallFont, new Vector2(_colTotal, headerY), Color.DarkSlateGray);
 
         // Company rows
         _detailButtons.Clear();
-        var companies = GetCompanySummaries();
         int rowHeight = 36;
         int listTop = yPositionOnScreen + 100;
         int listBottom = yPositionOnScreen + height - 80;
@@ -103,6 +177,10 @@ internal class InterestLogMenu : IClickableMenu
         b.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp, DepthStencilState.Default, new RasterizerState { ScissorTestEnable = true });
         Game1.graphics.GraphicsDevice.ScissorRectangle = clipRect;
 
+        string detailLabel = I18n.Get("uilog.5");
+        Vector2 detailLabelSize = Game1.tinyFont.MeasureString(detailLabel);
+        int detailBtnWidth = Math.Max(80, (int)detailLabelSize.X + 20);
+
         for (int i = _scrollOffset; i < companies.Count; i++)
         {
             var c = companies[i];
@@ -113,16 +191,16 @@ internal class InterestLogMenu : IClickableMenu
             if ((i - _scrollOffset) % 2 == 0)
                 b.Draw(Game1.staminaRect, new Rectangle(xPositionOnScreen + 30, rowY, width - 60, rowHeight - 2), Color.White * 0.08f);
 
-            Utility.drawTextWithShadow(b, c.DisplayName, Game1.smallFont, new Vector2(colCompany, rowY + 8), Game1.textColor);
-            Utility.drawTextWithShadow(b, c.TotalInterest.ToString("N0"), Game1.smallFont, new Vector2(colTotal, rowY + 8), Game1.textColor);
+            Utility.drawTextWithShadow(b, c.DisplayName, Game1.smallFont, new Vector2(_colCompany, rowY + 8), Game1.textColor);
+            Utility.drawTextWithShadow(b, c.TotalInterest.ToString("N0"), Game1.smallFont, new Vector2(_colTotal, rowY + 8), Game1.textColor);
 
             // Detail button
             var detailBtn = new ClickableTextureComponent(
-                new Rectangle(colDetail, rowY + 2, 80, 30),
+                new Rectangle(_colDetail, rowY + 2, detailBtnWidth, 30),
                 Game1.mouseCursors, new Rectangle(128, 384, 64, 64), 1f
             );
             _detailButtons.Add(detailBtn);
-            DrawTextButton(b, detailBtn, I18n.Get("uilog.5"), false, Color.DarkGreen);
+            DrawTextButton(b, detailBtn, detailLabel, false, Color.DarkGreen);
         }
 
         Game1.graphics.GraphicsDevice.ScissorRectangle = scissor;
@@ -140,6 +218,8 @@ internal class InterestLogMenu : IClickableMenu
 
     private void DrawCompanyDetail(SpriteBatch b)
     {
+        CalculateDetailColumns();
+
         // Title: company name + season
         string seasonName = GetLocalizedSeason(_account.InterestLogSeason);
         string title = I18n.Get("uilog.7", new { company = GetDisplayName(_detailCompanyName!), season = seasonName });
@@ -149,13 +229,9 @@ internal class InterestLogMenu : IClickableMenu
 
         // Column headers
         int headerY = yPositionOnScreen + 75;
-        int colDay = xPositionOnScreen + 40;
-        int colRate = xPositionOnScreen + 200;
-        int colInterest = xPositionOnScreen + 400;
-
-        Utility.drawTextWithShadow(b, I18n.Get("uilog.8"), Game1.smallFont, new Vector2(colDay, headerY), Color.DarkSlateGray);
-        Utility.drawTextWithShadow(b, I18n.Get("uilog.9"), Game1.smallFont, new Vector2(colRate, headerY), Color.DarkSlateGray);
-        Utility.drawTextWithShadow(b, I18n.Get("uilog.10"), Game1.smallFont, new Vector2(colInterest, headerY), Color.DarkSlateGray);
+        Utility.drawTextWithShadow(b, I18n.Get("uilog.8"), Game1.smallFont, new Vector2(_colDay, headerY), Color.DarkSlateGray);
+        Utility.drawTextWithShadow(b, I18n.Get("uilog.9"), Game1.smallFont, new Vector2(_colRate, headerY), Color.DarkSlateGray);
+        Utility.drawTextWithShadow(b, I18n.Get("uilog.10"), Game1.smallFont, new Vector2(_colInterest, headerY), Color.DarkSlateGray);
 
         // Day rows
         int rowHeight = 30;
@@ -181,9 +257,9 @@ internal class InterestLogMenu : IClickableMenu
                 b.Draw(Game1.staminaRect, new Rectangle(xPositionOnScreen + 30, rowY, width - 60, rowHeight - 2), Color.White * 0.08f);
 
             string dayLabel = I18n.Get("uilog.11", new { day = rec.SeasonDay });
-            Utility.drawTextWithShadow(b, dayLabel, Game1.smallFont, new Vector2(colDay, rowY + 5), Game1.textColor);
-            Utility.drawTextWithShadow(b, $"{rec.Rate:P2}", Game1.smallFont, new Vector2(colRate, rowY + 5), Game1.textColor);
-            Utility.drawTextWithShadow(b, rec.Interest.ToString("N0"), Game1.smallFont, new Vector2(colInterest, rowY + 5), Game1.textColor);
+            Utility.drawTextWithShadow(b, dayLabel, Game1.smallFont, new Vector2(_colDay, rowY + 5), Game1.textColor);
+            Utility.drawTextWithShadow(b, $"{rec.Rate:P2}", Game1.smallFont, new Vector2(_colRate, rowY + 5), Game1.textColor);
+            Utility.drawTextWithShadow(b, rec.Interest.ToString("N0"), Game1.smallFont, new Vector2(_colInterest, rowY + 5), Game1.textColor);
         }
 
         Game1.graphics.GraphicsDevice.ScissorRectangle = scissor;

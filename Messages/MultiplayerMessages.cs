@@ -1,3 +1,5 @@
+using BankMod.Data;
+
 namespace BankMod.Messages;
 
 /// <summary>Config sync: host sends to clients on connect.</summary>
@@ -34,6 +36,10 @@ public class BankDataSync
     public string CompanyName { get; set; } = "";
     public int NewDepositBalance { get; set; }
     public int NewLoanPrincipal { get; set; }
+    /// <summary>Updated AccumulatedInterest for the company (V3.7: needed for anti-compound display).</summary>
+    public int NewAccumulatedInterest { get; set; }
+    /// <summary>Updated BaseAmount for the company.</summary>
+    public int NewBaseAmount { get; set; }
 }
 
 /// <summary>Daily snapshot broadcast from host after OnDayStarted.</summary>
@@ -43,6 +49,10 @@ public class BankSnapshot
     public List<CompanySnapshot> Companies { get; set; } = new();
     public bool IsInBankruptcy { get; set; }
     public int PlayerMoney { get; set; }
+    /// <summary>Current season key (e.g. "spring_Year1") for interest log.</summary>
+    public string InterestLogSeason { get; set; } = "";
+    /// <summary>Per-day interest records for the current season, synced to clients for display.</summary>
+    public List<DailyInterestRecord> SeasonInterestLog { get; set; } = new();
 }
 
 [Serializable]
@@ -54,4 +64,10 @@ public class CompanySnapshot
     public double LoanRate { get; set; }
     public int DepositBalance { get; set; }
     public int LoanPrincipal { get; set; }
+    /// <summary>Accumulated deposit interest for this company.</summary>
+    public int AccumulatedInterest { get; set; }
+    /// <summary>Base amount (principal) for this company.</summary>
+    public int BaseAmount { get; set; }
 }
+
+// Note: DailyInterestRecord is defined in BankAccountData.cs and reused here for snapshot sync.

@@ -36,11 +36,23 @@ internal class BankChoiceMenu : IClickableMenu
         _config = config;
         _helper = helper;
 
-        int centerX = xPositionOnScreen + width / 2;
-        int btnY = yPositionOnScreen + height - 90;
-        int btnWidth = 140;
+        // Calculate button widths dynamically based on label text
+        string interestLogLabel = I18n.Get("uic.6");
+        string enterLabel = I18n_Phone_Choice_Enter();
+        string laterLabel = I18n_Phone_Choice_Later();
+
+        Vector2 interestLogSize = Game1.smallFont.MeasureString(interestLogLabel);
+        Vector2 enterSize = Game1.smallFont.MeasureString(enterLabel);
+        Vector2 laterSize = Game1.smallFont.MeasureString(laterLabel);
+
+        int minWidth = 120;
+        int padding = 30; // horizontal padding inside button
+        int btnWidth = Math.Max(minWidth, (int)Math.Max(interestLogSize.X + padding, Math.Max(enterSize.X + padding, laterSize.X + padding)));
         int btnHeight = 44;
         int gap = 15;
+
+        int centerX = xPositionOnScreen + width / 2;
+        int btnY = yPositionOnScreen + height - 90;
 
         // Three buttons: Interest Log | Enter Bank | Maybe Later
         int totalWidth = btnWidth * 3 + gap * 2;

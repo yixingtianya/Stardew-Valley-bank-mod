@@ -1017,7 +1017,9 @@ internal sealed class BankMod : Mod
             {
                 IsInBankruptcy = snapAccount.IsInBankruptcy,
                 PlayerMoney = Game1.player.Money,
-                Companies = new List<Messages.CompanySnapshot>()
+                Companies = new List<Messages.CompanySnapshot>(),
+                InterestLogSeason = snapAccount.InterestLogSeason,
+                SeasonInterestLog = snapAccount.SeasonInterestLog
             };
             var allCompanies = _services.CompanyManager.GetAllCompanyDefinitions(snapAccount);
             foreach (var c in allCompanies)
@@ -1030,11 +1032,13 @@ internal sealed class BankMod : Mod
                     DepositRate = c.DepositInterestRate,
                     LoanRate = c.LoanInterestRate,
                     DepositBalance = ca?.DepositBalance ?? 0,
-                    LoanPrincipal = account.Loans.Where(l => l.CompanyName == c.Name).Sum(l => l.Principal)
+                    LoanPrincipal = account.Loans.Where(l => l.CompanyName == c.Name).Sum(l => l.Principal),
+                    AccumulatedInterest = ca?.AccumulatedInterest ?? 0,
+                    BaseAmount = ca?.BaseAmount ?? 0
                 });
             }
             Helper.Multiplayer.SendMessage(snap, MsgBankSnapshot, null, null);
-            Monitor.Log(I18n.Get("mod.169"), LogLevel.Debug);
+            Monitor.Log($"[MP] Snapshot broadcast: {snap.Companies.Count} companies, {snap.SeasonInterestLog.Count} interest log records", LogLevel.Debug);
         }
     }
 
@@ -1734,8 +1738,9 @@ internal sealed class BankMod : Mod
                     {
                         int oldBal = ca.DepositBalance;
                         ca.DepositBalance = sync.NewDepositBalance;
-                        ca.BaseAmount = sync.NewDepositBalance;
-                        Monitor.Log($"[MP] BankDataSync applied: {sync.CompanyName} {oldBal}->{sync.NewDepositBalance} Loan={sync.NewLoanPrincipal}", LogLevel.Info);
+                        ca.BaseAmount = sync.NewBaseAmount;
+                        ca.AccumulatedInterest = sync.NewAccumulatedInterest;
+                        Monitor.Log($"[MP] BankDataSync applied: {sync.CompanyName} {oldBal}->{sync.NewDepositBalance} Base={sync.NewBaseAmount} AccInt={sync.NewAccumulatedInterest} Loan={sync.NewLoanPrincipal}", LogLevel.Info);
                     }
                     else
                     {
@@ -1813,7 +1818,10 @@ internal sealed class BankMod : Mod
                 {
                     var account = _services.BankAccountService.Load();
                     account.IsInBankruptcy = snap.IsInBankruptcy;
-                    Monitor.Log($"[MP] Snapshot received: {snap.Companies.Count} companies, Bankrupt={snap.IsInBankruptcy}, HostMoney={snap.PlayerMoney}", LogLevel.Info);
+                    // Sync interest log data
+                    account.InterestLogSeason = snap.InterestLogSeason;
+                    account.SeasonInterestLog = snap.SeasonInterestLog;
+                    Monitor.Log($"[MP] Snapshot received: {snap.Companies.Count} companies, Bankrupt={snap.IsInBankruptcy}, HostMoney={snap.PlayerMoney}, InterestLog={snap.SeasonInterestLog.Count} records", LogLevel.Info);
                     foreach (var cs in snap.Companies)
                     {
                         var ca = account.CompanyAccounts.FirstOrDefault(a => a.CompanyName == cs.Name);
@@ -1821,8 +1829,9 @@ internal sealed class BankMod : Mod
                         {
                             int oldBal = ca.DepositBalance;
                             ca.DepositBalance = cs.DepositBalance;
-                            ca.BaseAmount = cs.DepositBalance;
-                            Monitor.Log($"[MP]   Snapshot {cs.Name}: Bal {oldBal}->{cs.DepositBalance} Loan={cs.LoanPrincipal} Status={cs.Status}", LogLevel.Debug);
+                            ca.BaseAmount = cs.BaseAmount;
+                            ca.AccumulatedInterest = cs.AccumulatedInterest;
+                            Monitor.Log($"[MP]   Snapshot {cs.Name}: Bal {oldBal}->{cs.DepositBalance} Base={cs.BaseAmount} AccInt={cs.AccumulatedInterest} Loan={cs.LoanPrincipal} Status={cs.Status}", LogLevel.Debug);
                         }
                     }
                     _services.BankAccountService.Save(account);
@@ -1901,9 +1910,12 @@ internal sealed class BankMod : Mod
                 SenderId = req.SenderId,
                 CompanyName = req.CompanyName,
                 NewDepositBalance = ca?.DepositBalance ?? 0,
-                NewLoanPrincipal = account.Loans.Where(l => l.CompanyName == req.CompanyName).Sum(l => l.Principal)
+                NewLoanPrincipal = account.Loans.Where(l => l.CompanyName == req.CompanyName).Sum(l => l.Principal),
+                NewAccumulatedInterest = ca?.AccumulatedInterest ?? 0,
+                NewBaseAmount = ca?.BaseAmount ?? 0
             };
             Helper.Multiplayer.SendMessage(sync, MsgBankDataSync, null, null);
+            Monitor.Log($"[MP] BankDataSync broadcast: {req.CompanyName} Bal={sync.NewDepositBalance} Base={sync.NewBaseAmount} AccInt={sync.NewAccumulatedInterest}", LogLevel.Debug);
         }
         finally
         {

@@ -543,6 +543,7 @@ public class CompanyManager : ICompanyManager
         string seasonKey = $"{currentSeason}_Year{currentYear}";
         if (account.InterestLogSeason != seasonKey)
         {
+            _monitor.Log($"[InterestLog] Season changed to {seasonKey}, clearing log (was {account.InterestLogSeason}, {account.SeasonInterestLog.Count} records)", LogLevel.Info);
             account.InterestLogSeason = seasonKey;
             account.SeasonInterestLog.Clear();
         }
@@ -669,7 +670,10 @@ public class CompanyManager : ICompanyManager
             //    as principal). This is a necessary condition for manual compound interest —
             //    pure farming deposits never decrease AccInt.
             if (ca.AccumulatedInterest < ca.PreviousAccumulatedInterest)
+            {
                 ca.AccIntDecreasedInWindow = true;
+                _monitor.Log($"[V3.7] AccInt decreased for {ca.CompanyName}: {ca.PreviousAccumulatedInterest}->{ca.AccumulatedInterest} (delta={ca.AccumulatedInterest - ca.PreviousAccumulatedInterest})", LogLevel.Info);
+            }
             ca.PreviousAccumulatedInterest = ca.AccumulatedInterest;
 
             // 3. Compute today's principal delta
