@@ -728,6 +728,7 @@
   "uic.3": "Deposits & Withdrawals",
   "uic.4": "Transfers",
   "uic.5": "Customer Support",
+  "uic.6": "Interest Log",
   "uib.1": "Bankruptcy: Loans frozen, borrowing blocked\n50% income to debt repayment",
   "uib.2": "Loan Overdue — Auto-deducted after grace period",
   "uib.3": "Interest Arrears\nNot enough cash for daily interest\nOverdue balance growing",
@@ -910,5 +911,19 @@
   "config.snow_bonus.name": "Snowy Day Bonus",
   "config.snow_bonus.tooltip": "Extra rate bonus on snowy days (can be negative).",
   "config.lightning_bonus.name": "Thunderstorm Bonus",
-  "config.lightning_bonus.tooltip": "Extra rate bonus on thunderstorm days (can be negative)."
+  "config.lightning_bonus.tooltip": "Extra rate bonus on thunderstorm days (can be negative).",
+
+  "uilog.1": "Back",
+  "uilog.2": "Season Interest Log",
+  "uilog.3": "Company",
+  "uilog.4": "Total Interest",
+  "uilog.5": "Details",
+  "uilog.6": "Scroll ↑↓",
+  "uilog.7": "{company} — {season}",
+  "uilog.8": "Day",
+  "uilog.9": "Rate",
+  "uilog.10": "Interest",
+  "uilog.11": "Day {day}",
+  "uilog.12": "Season Total: {total}",
+  "uilog.13": "{season} Year {year}"
 }

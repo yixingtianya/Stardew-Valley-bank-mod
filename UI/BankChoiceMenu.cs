@@ -17,8 +17,10 @@ internal class BankChoiceMenu : IClickableMenu
     private readonly ModConfig _config;
     private readonly IModHelper _helper;
     private readonly ClickableTextureComponent _enterButton;
+    private readonly ClickableTextureComponent _interestLogButton;
     private readonly ClickableTextureComponent _laterButton;
     private bool _hoverEnter;
+    private bool _hoverInterestLog;
     private bool _hoverLater;
 
     public BankChoiceMenu(ModServices services, ModConfig config, IModHelper helper)
@@ -36,16 +38,26 @@ internal class BankChoiceMenu : IClickableMenu
 
         int centerX = xPositionOnScreen + width / 2;
         int btnY = yPositionOnScreen + height - 90;
-        int btnWidth = 160;
+        int btnWidth = 140;
         int btnHeight = 44;
+        int gap = 15;
+
+        // Three buttons: Interest Log | Enter Bank | Maybe Later
+        int totalWidth = btnWidth * 3 + gap * 2;
+        int startX = centerX - totalWidth / 2;
+
+        _interestLogButton = new ClickableTextureComponent(
+            new Rectangle(startX, btnY, btnWidth, btnHeight),
+            Game1.mouseCursors, new Rectangle(128, 384, 64, 64), 1f
+        );
 
         _enterButton = new ClickableTextureComponent(
-            new Rectangle(centerX - btnWidth - 25, btnY, btnWidth, btnHeight),
+            new Rectangle(startX + btnWidth + gap, btnY, btnWidth, btnHeight),
             Game1.mouseCursors, new Rectangle(128, 384, 64, 64), 1f
         );
 
         _laterButton = new ClickableTextureComponent(
-            new Rectangle(centerX + 25, btnY, btnWidth, btnHeight),
+            new Rectangle(startX + (btnWidth + gap) * 2, btnY, btnWidth, btnHeight),
             Game1.mouseCursors, new Rectangle(128, 384, 64, 64), 1f
         );
     }
@@ -93,6 +105,7 @@ internal class BankChoiceMenu : IClickableMenu
             );
         }
 
+        DrawTextButton(b, _interestLogButton, I18n.Get("uic.6"), _hoverInterestLog, Color.DarkBlue);
         DrawTextButton(b, _enterButton, I18n_Phone_Choice_Enter(), _hoverEnter, Color.DarkGreen);
         DrawTextButton(b, _laterButton, I18n_Phone_Choice_Later(), _hoverLater, Color.DarkGray);
 
@@ -116,7 +129,14 @@ internal class BankChoiceMenu : IClickableMenu
 
     public override void receiveLeftClick(int x, int y, bool playSound = true)
     {
-        if (_enterButton.containsPoint(x, y))
+        if (_interestLogButton.containsPoint(x, y))
+        {
+            Game1.playSound("bigSelect");
+            exitThisMenu();
+            var account = _services.BankAccountService.Load();
+            Game1.activeClickableMenu = new InterestLogMenu(account, _config, _helper, _services);
+        }
+        else if (_enterButton.containsPoint(x, y))
         {
             Game1.playSound("bigSelect");
             exitThisMenu();
@@ -137,6 +157,7 @@ internal class BankChoiceMenu : IClickableMenu
 
     public override void performHoverAction(int x, int y)
     {
+        _hoverInterestLog = _interestLogButton.containsPoint(x, y);
         _hoverEnter = _enterButton.containsPoint(x, y);
         _hoverLater = _laterButton.containsPoint(x, y);
     }

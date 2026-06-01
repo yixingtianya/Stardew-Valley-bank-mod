@@ -537,6 +537,18 @@ public class CompanyManager : ICompanyManager
     {
         if (account.CompanyAccounts.Count == 0) return;
 
+        // Season interest log: reset when season changes
+        string currentSeason = Game1.currentSeason;
+        int currentYear = Game1.year;
+        string seasonKey = $"{currentSeason}_Year{currentYear}";
+        if (account.InterestLogSeason != seasonKey)
+        {
+            account.InterestLogSeason = seasonKey;
+            account.SeasonInterestLog.Clear();
+        }
+        int daysPlayed = (int)Game1.stats.DaysPlayed;
+        int seasonDay = Game1.dayOfMonth;
+
         var allCompanyDefs = GetAllCompanyDefinitions(account);
         int totalInterest = 0;
         // Collect per-company interest for notification (use pre-increment values)
@@ -575,7 +587,6 @@ public class CompanyManager : ICompanyManager
 
             var calculator = company.IsDynamic ? _dynamicInterestCalculator : _fixedInterestCalculator;
             double rate = calculator.CalculateDepositRate(company, ctx);
-            if (rate == 0) continue;
 
             bool isCompound = _config.UseCompoundInterest
                 && !string.IsNullOrEmpty(account.CompoundActiveCompany)
@@ -583,6 +594,18 @@ public class CompanyManager : ICompanyManager
                 && account.CompoundDaysRemaining > 0;
             int principal = isCompound ? Math.Max(0, ca.DepositBalance) : Math.Max(0, ca.BaseAmount);
             int interest = (int)(principal * rate);
+
+            // Record daily interest log (even if interest is 0, to show rate)
+            account.SeasonInterestLog.Add(new DailyInterestRecord
+            {
+                Day = daysPlayed,
+                SeasonDay = seasonDay,
+                CompanyName = ca.CompanyName,
+                Rate = rate,
+                Interest = interest
+            });
+
+            if (rate == 0) continue;
 
             if (interest == 0) continue;
 

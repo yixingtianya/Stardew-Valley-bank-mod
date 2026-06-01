@@ -67,6 +67,12 @@ public class BankAccountData
     // Legacy fields — migrated to Loans on load by LoanService
     public int LoanPrincipal { get; set; }
     public int AccumulatedInterest { get; set; }
+
+    // === Season interest log ===
+    /// <summary>Season key when the interest log was last reset (e.g. "Spring_Year1").</summary>
+    public string InterestLogSeason { get; set; } = "";
+    /// <summary>Per-day interest records for the current season, used by the interest log viewer.</summary>
+    public List<DailyInterestRecord> SeasonInterestLog { get; set; } = new();
 }
 
 /// <summary>Tracks competitor suppression state for a crop when sold at shops (Stage 7.3).</summary>
@@ -101,6 +107,21 @@ public class CompanyAccount
     /// Manual compound interest requires interest to be withdrawn and re-deposited as principal,
     /// which causes AccInt to decrease. Pure farming deposits never decrease AccInt.</summary>
     public bool AccIntDecreasedInWindow { get; set; }
+}
+
+/// <summary>A single day's interest record for one company.</summary>
+public class DailyInterestRecord
+{
+    /// <summary>Game day number (DaysPlayed).</summary>
+    public int Day { get; set; }
+    /// <summary>Season day (1-28).</summary>
+    public int SeasonDay { get; set; }
+    /// <summary>Company name (stable English identifier).</summary>
+    public string CompanyName { get; set; } = "";
+    /// <summary>Effective deposit interest rate on this day.</summary>
+    public double Rate { get; set; }
+    /// <summary>Interest earned on this day.</summary>
+    public int Interest { get; set; }
 }
 
 /// <summary>Active loan record for a company. Each company can have one active loan at a time.</summary>

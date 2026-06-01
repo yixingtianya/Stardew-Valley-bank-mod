@@ -729,6 +729,7 @@
   "uic.3": "存取款业务",
   "uic.4": "汇款转账",
   "uic.5": "客服支持",
+  "uic.6": "利息明细",
   "uib.1": "破产保护 - 逾期贷款已冻结(0利息)，借款暂停，出货收入50%强制偿债",
   "uib.2": "贷款逾期 - 宽限期结束后将从存款强制划扣",
   "uib.3": "利息欠债 - 现金不足支付贷款日息，逾期利息持续累积",
@@ -911,5 +912,19 @@
   "config.snow_bonus.name": "雪天加成",
   "config.snow_bonus.tooltip": "雪天时的利率额外加成（可以是负值）。",
   "config.lightning_bonus.name": "雷暴加成",
-  "config.lightning_bonus.tooltip": "雷暴时的利率额外加成（可以是负值）。"
+  "config.lightning_bonus.tooltip": "雷暴时的利率额外加成（可以是负值）。",
+
+  "uilog.1": "返回",
+  "uilog.2": "本季利息明细",
+  "uilog.3": "公司",
+  "uilog.4": "总利息",
+  "uilog.5": "详情",
+  "uilog.6": "滚动 ↑↓",
+  "uilog.7": "{company} — {season}",
+  "uilog.8": "日期",
+  "uilog.9": "利率",
+  "uilog.10": "利息",
+  "uilog.11": "第{day}天",
+  "uilog.12": "本季合计: {total}",
+  "uilog.13": "{season} 第{year}年"
 }
