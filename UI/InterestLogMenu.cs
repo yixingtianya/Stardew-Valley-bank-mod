@@ -59,7 +59,7 @@ internal class InterestLogMenu : IClickableMenu
     }
 
     private ClickableTextureComponent BackButton => new(
-        new Rectangle(xPositionOnScreen + 20, yPositionOnScreen + height - 60, 100, 40),
+        new Rectangle(xPositionOnScreen + 20, yPositionOnScreen + height - 50, 100, 40),
         Game1.mouseCursors, new Rectangle(128, 384, 64, 64), 1f);
 
     public override void draw(SpriteBatch b)
@@ -87,7 +87,7 @@ internal class InterestLogMenu : IClickableMenu
         string totalHeaderText = I18n.Get("uilog.4");
         Vector2 totalHeaderSize = Game1.smallFont.MeasureString(totalHeaderText);
         string detailText = I18n.Get("uilog.5");
-        Vector2 detailSize = Game1.tinyFont.MeasureString(detailText);
+        Vector2 detailSize = Game1.smallFont.MeasureString(detailText);
 
         int detailBtnWidth = Math.Max(80, (int)detailSize.X + 20);
         _colDetail = xPositionOnScreen + width - pad - detailBtnWidth;
@@ -178,7 +178,7 @@ internal class InterestLogMenu : IClickableMenu
         Game1.graphics.GraphicsDevice.ScissorRectangle = clipRect;
 
         string detailLabel = I18n.Get("uilog.5");
-        Vector2 detailLabelSize = Game1.tinyFont.MeasureString(detailLabel);
+        Vector2 detailLabelSize = Game1.smallFont.MeasureString(detailLabel);
         int detailBtnWidth = Math.Max(80, (int)detailLabelSize.X + 20);
 
         for (int i = _scrollOffset; i < companies.Count; i++)
@@ -211,8 +211,8 @@ internal class InterestLogMenu : IClickableMenu
         if (_maxScroll > 0)
         {
             string scrollHint = I18n.Get("uilog.6");
-            Utility.drawTextWithShadow(b, scrollHint, Game1.tinyFont,
-                new Vector2(xPositionOnScreen + width - 120, listBottom + 5), Color.Gray);
+            Utility.drawTextWithShadow(b, scrollHint, Game1.smallFont,
+                new Vector2(xPositionOnScreen + width - 140, listBottom + 5), Color.Gray);
         }
     }
 
@@ -341,10 +341,10 @@ internal class InterestLogMenu : IClickableMenu
         b.Draw(Game1.staminaRect, new Rectangle(btn.bounds.X, btn.bounds.Y, 2, btn.bounds.Height), borderColor);
         b.Draw(Game1.staminaRect, new Rectangle(btn.bounds.X + btn.bounds.Width - 2, btn.bounds.Y, 2, btn.bounds.Height), borderColor);
 
-        Vector2 labelSize = Game1.tinyFont.MeasureString(label);
+        Vector2 labelSize = Game1.smallFont.MeasureString(label);
         float x = btn.bounds.X + (btn.bounds.Width - labelSize.X) / 2;
         float y = btn.bounds.Y + (btn.bounds.Height - labelSize.Y) / 2;
-        Utility.drawTextWithShadow(b, label, Game1.tinyFont, new Vector2(x, y), hover ? Color.Black : Game1.textColor);
+        Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(x, y), hover ? Color.Black : Game1.textColor);
     }
 
     public override void receiveLeftClick(int x, int y, bool playSound = true)
