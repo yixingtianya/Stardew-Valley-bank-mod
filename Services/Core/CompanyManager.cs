@@ -181,6 +181,8 @@ public class CompanyManager : ICompanyManager
                         expiringCa.WindowPeak = 0;
                         expiringCa.WindowBreakCount = 0;
                         expiringCa.PreviousBaseAmount = expiringCa.BaseAmount;
+                        expiringCa.PreviousAccumulatedInterest = expiringCa.AccumulatedInterest;
+                        expiringCa.AccIntDecreasedInWindow = false;
                         _monitor.Log($"[Compound] Reset anti-compound sliding window for {expiringCompanyName}", LogLevel.Info);
                     }
                 }
@@ -624,12 +626,14 @@ public class CompanyManager : ICompanyManager
         foreach (var ca in account.CompanyAccounts)
         {
             // Stage 15: skip anti-compound detection when official compound is active,
-            // but still update PreviousBaseAmount so there's no accumulated drift when compound expires
+            // but still update PreviousBaseAmount/PreviousAccumulatedInterest so there's
+            // no accumulated drift when compound expires
             if (!string.IsNullOrEmpty(account.CompoundActiveCompany)
                 && account.CompoundActiveCompany == ca.CompanyName
                 && account.CompoundDaysRemaining > 0)
             {
                 ca.PreviousBaseAmount = ca.BaseAmount;
+                ca.PreviousAccumulatedInterest = ca.AccumulatedInterest;
                 continue;
             }
 
@@ -637,17 +641,25 @@ public class CompanyManager : ICompanyManager
             if (ca.PenaltyDaysRemaining > 0)
                 ca.PenaltyDaysRemaining--;
 
-            // 2. Compute today's principal delta
+            // 2. Check if AccumulatedInterest decreased compared to yesterday.
+            //    AccInt decreasing means interest was withdrawn (and potentially re-deposited
+            //    as principal). This is a necessary condition for manual compound interest —
+            //    pure farming deposits never decrease AccInt.
+            if (ca.AccumulatedInterest < ca.PreviousAccumulatedInterest)
+                ca.AccIntDecreasedInWindow = true;
+            ca.PreviousAccumulatedInterest = ca.AccumulatedInterest;
+
+            // 3. Compute today's principal delta
             int delta = ca.BaseAmount - ca.PreviousBaseAmount;
             ca.PreviousBaseAmount = ca.BaseAmount;
 
-            // 3. Write to sliding window (only positives count; zeros/negatives preserve position)
+            // 4. Write to sliding window (only positives count; zeros/negatives preserve position)
             if (delta > 0)
                 ca.RecentPrincipalDeltas[ca.WindowDayIndex] = delta;
             else
                 ca.RecentPrincipalDeltas[ca.WindowDayIndex] = 0;
 
-            // 4. Scan window from oldest to newest for peak-break pattern
+            // 5. Scan window from oldest to newest for peak-break pattern
             int peak = 0;
             int breakCount = 0;
             int lastPos = 0;
@@ -686,13 +698,16 @@ public class CompanyManager : ICompanyManager
             ca.WindowPeak = peak;
             ca.WindowBreakCount = breakCount;
 
-            // 5. Trigger penalty
-            if (breakCount >= 3 && ca.PenaltyDaysRemaining <= 0)
+            // 6. Trigger penalty — requires BOTH:
+            //    a) Peak-break pattern (breakCount >= 3): principal deposits are escalating
+            //    b) AccInt decreased in window: interest was withdrawn and converted to principal
+            //    Without (b), escalating deposits are just normal farming income (selling crops).
+            if (breakCount >= 3 && ca.AccIntDecreasedInWindow && ca.PenaltyDaysRemaining <= 0)
             {
                 ca.PenaltyDaysRemaining = 7;
                 _monitor.Log(
                     $"[V3.7] Manual compound interest detected for {ca.CompanyName}! " +
-                    $"Peak breaks: {breakCount}, deposit rate reduced to 10% for 7 days.",
+                    $"Peak breaks: {breakCount}, AccInt decreased in window, deposit rate reduced to 10% for 7 days.",
                     LogLevel.Warn);
                 if (_config.ShowCompanyDangerWarning)
                 {
@@ -705,7 +720,7 @@ public class CompanyManager : ICompanyManager
                 }
             }
 
-            // 6. Advance window; reset state on wrap
+            // 7. Advance window; reset state on wrap
             ca.WindowDayIndex = (ca.WindowDayIndex + 1) % 7;
             if (ca.WindowDayIndex == 0)
             {
@@ -713,6 +728,7 @@ public class CompanyManager : ICompanyManager
                 ca.LastPositiveDelta = 0;
                 ca.WindowPeak = 0;
                 ca.WindowBreakCount = 0;
+                ca.AccIntDecreasedInWindow = false;
             }
         }
     }

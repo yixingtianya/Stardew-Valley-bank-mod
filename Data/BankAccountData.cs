@@ -94,6 +94,13 @@ public class CompanyAccount
     public int WindowBreakCount { get; set; }
     public int PenaltyDaysRemaining { get; set; }
     public int PreviousBaseAmount { get; set; }
+    /// <summary>AccumulatedInterest value at end of previous day's processing.
+    /// Used to detect AccInt decreases (interest → principal conversion).</summary>
+    public int PreviousAccumulatedInterest { get; set; }
+    /// <summary>Whether AccumulatedInterest decreased at any point during the current 7-day window.
+    /// Manual compound interest requires interest to be withdrawn and re-deposited as principal,
+    /// which causes AccInt to decrease. Pure farming deposits never decrease AccInt.</summary>
+    public bool AccIntDecreasedInWindow { get; set; }
 }
 
 /// <summary>Active loan record for a company. Each company can have one active loan at a time.</summary>
