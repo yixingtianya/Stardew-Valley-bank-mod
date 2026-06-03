@@ -291,7 +291,7 @@ internal class BankMenu : IClickableMenu
         b.Draw(Game1.staminaRect, new Rectangle(xPositionOnScreen + 30, dividerY, width - 60, 2), Color.Gray);
 
         // Company tabs
-        int maxVisibleTabs = _isChinese ? 4 : 2;
+        int maxVisibleTabs = _isChinese ? 4 : 3;
         int tabScrollMax = Math.Max(0, _companyList.Count - maxVisibleTabs);
         _tabScrollOffset = Math.Clamp(_tabScrollOffset, 0, tabScrollMax);
 
@@ -763,7 +763,7 @@ internal class BankMenu : IClickableMenu
         }
 
         // Tab click — use same dynamic positioning as draw
-        int maxVisible = _isChinese ? 4 : 2;
+        int maxVisible = _isChinese ? 4 : 3;
         int tabX = xPositionOnScreen + 30;
         for (int i = _tabScrollOffset; i < Math.Min(_companyList.Count, _tabScrollOffset + maxVisible); i++)
         {
@@ -785,7 +785,7 @@ internal class BankMenu : IClickableMenu
             _tabScrollOffset--;
             return;
         }
-        if (_tabRightArrow.Contains(x, y) && _tabScrollOffset < Math.Max(0, _companyList.Count - 4))
+        if (_tabRightArrow.Contains(x, y) && _tabScrollOffset < Math.Max(0, _companyList.Count - maxVisible))
         {
             Game1.playSound("smallSelect");
             _tabScrollOffset++;

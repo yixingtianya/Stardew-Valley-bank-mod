@@ -9,7 +9,7 @@ namespace BankMod.UI;
 
 internal class NumberInputMenu : IClickableMenu
 {
-    private const int WindowWidth = 500;
+    private const int WindowWidth = 540;
     private const int WindowHeight = 250;
 
     private readonly string _prompt;
@@ -28,7 +28,7 @@ internal class NumberInputMenu : IClickableMenu
     private bool _hoverCancel;
     private bool _hoverAll;
 
-    private const int BtnWidth = 100;
+    private const int BtnWidth = 130;
     private const int BtnHeight = 44;
 
     public NumberInputMenu(string prompt, Action<int> onConfirm, Action onCancel,
@@ -141,10 +141,23 @@ internal class NumberInputMenu : IClickableMenu
         b.Draw(Game1.staminaRect, new Rectangle(btn.bounds.X, btn.bounds.Y, 3, btn.bounds.Height), borderColor);
         b.Draw(Game1.staminaRect, new Rectangle(btn.bounds.X + btn.bounds.Width - 3, btn.bounds.Y, 3, btn.bounds.Height), borderColor);
 
-        Vector2 labelSize = Game1.smallFont.MeasureString(label);
+        string drawLabel = label;
+        bool isChinese = LocalizedContentManager.CurrentLanguageCode == LocalizedContentManager.LanguageCode.zh;
+        if (!isChinese)
+        {
+            Vector2 checkSize = Game1.smallFont.MeasureString(label);
+            if (checkSize.X > btn.bounds.Width - 8)
+            {
+                while (drawLabel.Length > 1 && Game1.smallFont.MeasureString(drawLabel + "...").X > btn.bounds.Width - 8)
+                    drawLabel = drawLabel[..^1];
+                drawLabel += "..";
+            }
+        }
+
+        Vector2 labelSize = Game1.smallFont.MeasureString(drawLabel);
         float x = btn.bounds.X + (btn.bounds.Width - labelSize.X) / 2;
         float y = btn.bounds.Y + (btn.bounds.Height - labelSize.Y) / 2;
-        Utility.drawTextWithShadow(b, label, Game1.smallFont, new Vector2(x, y), hover ? Color.Black : Game1.textColor);
+        Utility.drawTextWithShadow(b, drawLabel, Game1.smallFont, new Vector2(x, y), hover ? Color.Black : Game1.textColor);
     }
 
     public override void receiveLeftClick(int x, int y, bool playSound = true)
