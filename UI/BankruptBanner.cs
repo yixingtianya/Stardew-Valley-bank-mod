@@ -15,7 +15,13 @@ internal class BankruptBanner : IClickableMenu
 
     public static void Show()
     {
-        if (_instance != null) return;
+        if (_instance != null)
+        {
+            // Re-add if removed by locale change or other reset
+            if (!Game1.onScreenMenus.Contains(_instance))
+                Game1.onScreenMenus.Add(_instance);
+            return;
+        }
         _instance = new BankruptBanner();
         Game1.onScreenMenus.Add(_instance);
     }

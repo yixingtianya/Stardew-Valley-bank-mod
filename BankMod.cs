@@ -66,20 +66,24 @@ internal sealed class BankMod : Mod
     private Vector2? _morrisOriginalPos;
 
     private static string? _morrisEventScript;
-    private static string MorrisEventScript => _morrisEventScript ??= // continue/27 7/farmer 27 7 1 Morris 22 7 1/
-        "continue/27 7/farmer 27 7 1 Morris 22 7 1/" +
-        "pause 500/fade/viewport 26 7/pause 400/" +
-        "jump farmer/pause 800/" +
-        "faceDirection farmer 3/pause 300/" +
-        Speak("Morris", I18n.Get("mod.2")) + "/pause 500/" +
-        "/emote Morris 28/pause 300/" +
-        Speak("Morris", I18n.Get("mod.3")) + "/pause 500/" +
-        Speak("Morris", I18n.Get("mod.4")) + "/pause 300/" +
-        Speak("Morris", I18n.Get("mod.5")) + "/pause 500/" +
-        Speak("Morris", I18n.Get("mod.6")) + "/end";
-
-    private static string Speak(string npc, string text) =>
-        $"speak {npc} \"{text}\"";
+    private static string MorrisEventScript => _morrisEventScript ??=
+        BuildMorrisScript();
+    private static string BuildMorrisScript()
+    {
+        string Speak(string text, int pause) =>
+            "speak Morris \"" + text + "\"/pause " + pause + "/";
+        return
+            "continue/27 7/farmer 27 7 1 Morris 22 7 1/" +
+            "pause 500/fade/viewport 26 7/pause 400/" +
+            "jump farmer/pause 800/" +
+            "faceDirection farmer 3/pause 300/" +
+            Speak(I18n.Get("mod.2"), 500) +
+            "emote Morris 28/pause 300/" +
+            Speak(I18n.Get("mod.3"), 500) +
+            Speak(I18n.Get("mod.4"), 300) +
+            Speak(I18n.Get("mod.5"), 500) +
+            "speak Morris \"" + I18n.Get("mod.6") + "\"/end";
+    }
     /*********
     ** Public methods
     *********/
@@ -92,9 +96,6 @@ internal sealed class BankMod : Mod
         var sampleKey = "mod.36";
         var sampleVal = I18n.Get(sampleKey);
         Monitor.Log($"[i18n] Locale='{locale}' (empty=English) | {sampleKey}='{sampleVal}'", LogLevel.Debug);
-        var mod2 = I18n.Get("mod.2");
-        Monitor.Log($"[i18n] mod.2 raw bytes: [{string.Join(",", System.Text.Encoding.UTF8.GetBytes(mod2).Take(40))}]", LogLevel.Debug);
-        Monitor.Log($"[i18n] mod.2 repr: '{mod2.Replace("\\", "\\\\").Replace("\"", "\\\"")}'", LogLevel.Debug);
 
         // Load config
         _config = helper.ReadConfig<ModConfig>();
@@ -274,23 +275,12 @@ internal sealed class BankMod : Mod
 
     private void OnLocaleChanged(object? sender, LocaleChangedEventArgs e)
     {
-        // Diagnose: compare I18n static ref vs fresh Helper.Translation
-        var viaStatic = I18n.Get("mod.36");
-        var viaFresh = Helper.Translation.Get("mod.36").ToString();
         Monitor.Log($"[i18n] Locale changed: '{e.OldLocale}' -> '{e.NewLocale}'", LogLevel.Info);
-        Monitor.Log($"[i18n]   via I18n.Get:     '{viaStatic}'", LogLevel.Info);
-        Monitor.Log($"[i18n]   via fresh Helper: '{viaFresh}'", LogLevel.Info);
-        if (viaStatic != viaFresh)
-            Monitor.Log("[i18n]   *** MISMATCH detected — I18n.Translations is stale! ***", LogLevel.Warn);
+        // Clear cached event script so it rebuilds with new locale
+        _morrisEventScript = null;
 
-        // Refresh the static reference
         I18n.Init(Helper.Translation);
-
         RefreshGmcm();
-
-        // Verify after refresh
-        var afterRefresh = I18n.Get("mod.36");
-        Monitor.Log($"[i18n]   after I18n.Init refresh: '{afterRefresh}'", LogLevel.Info);
     }
 
     private void RefreshGmcm()
@@ -1447,9 +1437,6 @@ internal sealed class BankMod : Mod
                     }
 
                     if (Game1.currentLocation is null) return;
-                    Monitor.Log($"[MorrisEvent] Script length={MorrisEventScript.Length}", LogLevel.Info);
-                    Monitor.Log($"[MorrisEvent] First 200 chars: {MorrisEventScript[..Math.Min(200, MorrisEventScript.Length)]}", LogLevel.Info);
-                    Monitor.Log($"[MorrisEvent] Raw bytes[30..80]: [{string.Join(",", System.Text.Encoding.UTF8.GetBytes(MorrisEventScript).Skip(30).Take(50))}]", LogLevel.Info);
                     var evt = new Event(MorrisEventScript, Game1.player);
                     Game1.currentLocation.startEvent(evt);
                     _waitingForMorrisEventEnd = true;
