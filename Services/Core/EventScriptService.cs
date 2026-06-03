@@ -51,7 +51,7 @@ public class EventScriptService : IEventScriptService
                 if (sp > 0) { npcName = rest[..sp]; text = rest[(sp + 1)..].Trim('"', ' '); }
                 if (isJojaRoute)
                 {
-                    cmds.Add("message \"" + text + "\"");
+                    cmds.Add("speak " + npcName + " \"" + text + "\"");
                 }
                 else if (npcName == "Phone")
                 {
