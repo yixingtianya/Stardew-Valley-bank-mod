@@ -72,7 +72,7 @@ internal sealed class BankMod : Mod
         "jump farmer/pause 800/" +
         "faceDirection farmer 3/pause 300/" +
         I18n.Get("mod.2") +
-        "emote Morris 28/pause 300/" +
+        "/emote Morris 28/pause 300/" +
         I18n.Get("mod.3") +
         I18n.Get("mod.4") +
         I18n.Get("mod.5") +
