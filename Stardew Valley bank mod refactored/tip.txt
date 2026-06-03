@@ -1,0 +1,165 @@
+
+
+## 1. 搜索 SMAPI 文档的正确姿势
+
+**SMAPI 官方文档地址：**
+- https://stardewvalleywiki.com/Modding:Modder_Guide/APIs/Translation
+- https://github.com/Pathoschild/SMAPI/blob/develop/docs/technical/mod-package.md
+
+直接在项目里查也行：
+- SMAPI 的 NuGet 包 `Pathoschild.Stardew.ModBuildConfig` 下载后，XML 文档在 `~/.nuget/packages/pathoschild.stardew.modbuildconfig/` 里
+- 或者在星露谷游戏目录 `smapi-internal/` 下找 `StardewModdingAPI.dll`，用 ILSpy / dnSpy 反编译直接看源码
+
+**用 dnSpy 查 Translation 类：**
+```
+打开 dnSpy → 加载 StardewModdingAPI.dll → 搜索 Translation 类
+→ 看 Get() 返回类型，看 ToString() 实现
+```
+这样就不会瞎猜 `.ToString()` 的行为了。
+
+---
+
+## 2. SMAPI 翻译系统正确用法
+
+ITranslationHelper 的 `Get(key, tokens)` 返回的**就是 string**，token 替换已经完成了，**不需要**手动调 `.ToString()` 或 `string.Format`：
+
+```csharp
+// ✅ 正确：直接拿到替换后的字符串
+string text = helper.Translation.Get("mod.157", new { 
+    name = c.DisplayName, 
+    dep = depositRate,
+    loan = loanRate,
+    fuel = fuelCost,
+    cap = fuelCap 
+});
+```
+
+所以 I18n.cs 的包装方法应该写成：
+
+```csharp
+public static string Get(string key, object tokens)
+{
+    if (Translations == null)
+        return key;
+    // SMAPI 的 Get(key, tokens) 重载直接返回 string，token 已替换
+    return Translations.Get(key, tokens);
+}
+```
+
+**根本不需要 `string.Format`**。如果 token 没替换，说明传入的匿名对象属性名和 JSON 里的 token 名不匹配，或者 JSON 里的花括号写法有问题（比如用了 `{0}` 而不是 `{name}`）。
+
+---
+
+## 总结建议
+
+别绕弯子用 `string.Format`，直接用 SMAPI 原生的 `Get(key, tokens)` 就行。排查方向应该是：
+1. 确认 JSON 里用的是命名 token（`{name}` 不是 `{0}`）
+2. 确认传入匿名对象的属性名和 token 名完全一致
+3. 如果还有问题，用 dnSpy 看 SMAPI 源码里 Translation 类的实现
+
+
+SMAPI 翻译 Token 的正确用法
+根据 SMAPI 的官方 API，翻译系统的 Token 替换非常简单，不需要手动调用 string.Format。以下是标准做法：
+
+1. JSON 翻译文件中使用命名 Token
+在 i18n/default.json 中使用命名 Token（而非位置 Token）：
+
+json
+{
+  "crop.rate": "{name}：存款{dep}% 贷款{loan}% 日耗{fuel} 燃料上限{cap}",
+  "zone.count": "高回报区 {count} 种",
+  "mod.loaded": "动态金融公司系统 v{version} 加载成功！"
+}
+2. C# 代码中直接传入匿名对象
+SMAPI 的 ITranslationHelper.Get(key, tokens) 方法返回的就是 string，不需要额外处理：
+
+csharp
+// ✅ 正确方式：Get(key, tokens) 直接返回替换后的字符串
+string cropInfo = helper.Translation.Get("crop.rate", new {
+    name = crop.DisplayName,
+    dep = depositRate,
+    loan = loanRate,
+    fuel = fuelDailyCost,
+    cap = fuelCap
+});
+
+// ✅ 区域计数
+string zoneTitle = helper.Translation.Get("zone.count", new { count = crops.Count });
+
+// ✅ 版本信息
+string loadedMsg = helper.Translation.Get("mod.loaded", new { version = ModManifest.Version });
+3. I18n.cs 包装类的正确写法
+csharp
+public static class I18n
+{
+    private static ITranslationHelper? Translations;
+
+    public static void Init(ITranslationHelper translations)
+    {
+        Translations = translations;
+    }
+
+    // 无 Token 的翻译
+    public static string Get(string key)
+    {
+        return Translations?.Get(key) ?? key;
+    }
+
+    // 带 Token 的翻译 - 直接返回 string，不需要 .ToString()
+    public static string Get(string key, object tokens)
+    {
+        return Translations?.Get(key, tokens) ?? key;
+    }
+}
+关键点
+ITranslationHelper.Get(key, tokens) 返回的就是 string，Token 替换已由 SMAPI 自动完成
+
+匿名对象的属性名必须与 JSON 中的 Token 名称完全一致
+
+不要使用 {0}, {1} 等位置标记
+
+不要手动调用 string.Format
+
+如果 Token 替换仍未生效的排查步骤
+检查 JSON 格式：确保 i18n/default.json 是合法的 JSON，Token 用花括号包围如 {name}
+
+检查属性名匹配：传入匿名对象的属性名需与 Token 名完全一致（区分大小写）
+
+检查 JSON 编码：文件是否以正确的编码保存？中文字符是否已转义或编码错误？
+
+检查文件部署：运行时的 i18n/default.json 是否已更新？
+
+SMAPI 日志：检查 SMAPI 控制台是否有任何关于翻译键缺失的警告
+
+如果 JSON 文件的中文出现乱码（如   ），需要确保文件以 UTF-8 编码保存，这是 SMAPI 处理翻译文件的标准编码。
+
+
+
+虽然搜索结果里没提到类似 Bug，但我们可以结合 SMAPI 的工作原理和你的日志，推理出问题大概率不在官方 API 本身，而在你是怎么用它的。
+
+根据官方文档和一些技术分析，SMAPI 翻译系统的工作逻辑大致如下：
+
+helper.Translation 是一个实时引用吗？
+SMAPI 内部有个 Translator 类，它在语言变化时会调用 SetLocale 来更新内部的 ForLocale 缓存。这意味着，我们通常认为通过 helper.Translation（只要 helper 是当前的）拿到的翻译，也应该会指向更新后的 Translator。
+
+官方文档的提示
+Wiki 上反复提到一个命令：在 SMAPI 控制台输入 reload_i18n 可以热重载翻译。但关键是后面那句注释："如果一个模组内部缓存了翻译，它可能不会被更新"。
+
+这就是你踩的坑。问题很可能就在这里：
+
+你的代码或许无意间"缓存"了翻译：排查一下代码，看是否在某些地方把通过 helper.Translation.Get("key") 获取到的字符串结果，赋值给了一个静态变量或属性。这样就算 SMAPI 内部更新了，你的代码里拿着的还是那个旧的字符串。
+
+helper 对象本身是否过期：极少数情况下，你可能在某个地方引用了旧的 helper 实例，导致通过它拿到的 Translation 对象还是语言切换前的状态。
+
+Locale 变化的"时间差"：你的日志显示语言切换事件确实触发了。但在事件触发的那一瞬间，SMAPI 内部可能还没完全完成新语言文件的加载和缓存更新，导致那一刻请求的还是旧资源。
+
+所以，与其说是 SMAPI 的"原生 Bug"，不如说是我们踩进了一个关于"引用"和"缓存时效"的坑。
+
+我们之前想直接绕过它自己读文件，这个方法当然能解决问题，但确实有点"杀鸡用牛刀"了。动手之前，可以先试试两个更精准的排查方法，可能很快就能揪出元凶：
+
+先别急着绕过 SMAPI：在你的 OnLocaleChanged 事件处理器里，别只拿 I18n.Get()，也当场调用一次 this.Helper.Translation.Get("mod.36")。用日志对比这两个结果和 helper 的哈希码，看看是不是完全一样。这能帮你确认问题是不是出在"引用"上。
+
+在游戏里用控制台命令测试：保持游戏运行，切换语言后，在 SMAPI 控制台输入 reload_i18n 命令，然后看看界面上的文字有没有变过来。这能帮你判断是不是 SMAPI 本身就没加载对文件。
+
+如果这些方法试完问题依旧，那再祭出"自己读 JSON"这招也不迟。但万一只是某个地方的静态变量没刷新，那这么个大工程就绕太远了。
+

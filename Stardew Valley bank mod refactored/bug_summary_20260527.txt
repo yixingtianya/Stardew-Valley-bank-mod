@@ -1,0 +1,90 @@
+========================================================
+  星露谷金融 mod — 调试问题总结 (2026-05-27)
+========================================================
+
+--- 问题 1: 固态公司贷款不显示（动态公司正常）---
+
+症状：破产状态显示但贷款列表为空；loan_debug.txt 显示贷款 CompanyName="Joja超市"，但公司 Name="JojaMart"，match by Name: NONE。
+
+根因（三层叠加）：
+  (a) 贷款记录存储的是旧版中文显示名（如"Joja超市"），而路线效果将公司 Name 改为英文（如"JojaMart"）。GetCompanyLoans 只按 company.Name 匹配，无法跨语言匹配。
+  (b) MigrateLoanNames() 的迁移代码用子串匹配：
+      "JojaMart".Contains("Joja超市") → 永远 false。
+  (c) 即使用 I18n.Get("loc.1") 作为翻译桥接，在 SaveLoaded 阶段 i18n 系统可能未就绪，返回英文默认值而非中文。
+
+修复：
+  (a) GetLoan / GetCompanyLoans 改为接受 CompanyDefinition，同时按 Name、OriginalName、CropCode 三字段匹配。
+  (b) KnownTranslations 改为硬编码字典，不依赖 i18n：
+      "Joja超市" → "JojaMart"
+      "皮埃尔杂货店" → "Pierre's General Store"
+      "皮埃尔的杂货店" → "Pierre's General Store"（含"的"变体）
+
+--- 问题 2: 动态公司名中文环境下显示英文 ---
+
+症状：loan_debug 显示 "Cranberry公司" 而非 "蔓越莓公司"，即使 Locale=zh-cn。
+
+根因：CropDataRecord.DisplayName 在 CropDataProvider 静态构造函数中通过 I18n.Get("fbn.147") 初始化。若构造时 locale 未就绪或为英文，捕获的值永远是英文。
+
+修复：CropDataRecord 增加 NameKey 字段（如 "fbn.147"），DisplayName 改为运行时计算属性：
+    public string DisplayName => I18n.Get(NameKey);
+每次访问时根据当前 locale 实时翻译。
+
+--- 问题 3: GMCM 标签文字溢出滑块区域 ---
+
+症状：T7.png 显示 "Liquidation: Stable (%) (<=Prosperous)" 覆盖滑块；
+T8.png 显示 "Prosperous period loan cap multiplier" 等 5 个标签均溢出。
+
+根因：Stardew Valley 像素字体中英文字符宽度较大，30+ 字符的标签超出 GMCM 固定宽度的标签区域。之前按"Compound interest Duration (days)"（32 字符）设限，实际安全上限约 28 字符。
+
+修复（English）：
+  mod.122: "Liquidation: Stable (%) (<=Prosperous)" → "Liq: Stable (%)(≤Prosperous)"
+  mod.125: "Prosperous period loan cap multiplier" → "Prosperous cap multiplier"
+  mod.127: "Stable period loan cap multiplier" → "Stable cap multiplier"
+  mod.129: "Hungry period loan cap multiplier" → "Hungry cap multiplier"
+  mod.131: "Critical period loan cap multiplier" → "Critical cap multiplier"
+  mod.133: "Bailout cap (Loan cap x ratio)" → "Bailout cap ratio"
+中文标签字符数较少（9-16 字符），无需修改。
+
+--- 问题 4: 贷款详情中金额数字不显示 ---
+
+症状：贷款详情面板显示"贷款本金"、"累计利息"、"应还"等标签，但后面的金额数字为空。
+
+根因：i18n 模板字符串缺少 {amount} 占位符，代码也未传入金额参数。
+  uib.25: "贷款本金" → 缺少金额
+  uib.26: "累计未还利息" → 缺少金额
+  uib.42: "Accumulated interest" → 缺少金额
+  uib.44: "Amount due" → 缺少金额
+  ...等等
+
+修复：
+  (a) i18n 模板增加 {amount} 占位符（中英文同步修改）
+  (b) 代码中计算 totalPrincipal / totalInterest / totalOwed 并传入 I18n.Get()
+  (c) 每笔贷款的 detail view 也传入 l.AccumulatedInterest / l.OverdueInterest / owed
+
+--- 问题 5: GMCM 中 "14天" 误植 ---
+
+症状：GMCM 设置界面出现 "14天周期利率折扣" 字样。
+
+根因：i18n/zh.json 中 mod.99 的文本为 "14天周期利率折扣 (%/天)"，是原始 i18n 文本，非代码逻辑添加。利率机制始终为每日计算，"14天" 是文案错误。
+
+修复：mod.99 中英文文本改为 "长期利率折扣" / "Long-term Rate Discount"。
+
+--- 问题 6: Pierre 贷款变体名不匹配 ---
+
+症状：Pierre 贷款 CompanyName="皮埃尔的杂货店"（含"的"），但 i18n loc.2 返回"皮埃尔杂货店"（不含"的"），迁移匹配失败。
+
+根因：不同时期的 mod 版本对 Pierre 公司名使用了不同 i18n key（loc.2 vs cfg.3），导致存档中出现两种写法。
+
+修复：KnownTranslations 硬编码同时包含两种变体。
+
+========================================================
+  关键文件变更列表
+========================================================
+Services/Core/RouteService.cs     — 硬编码 KnownTranslations，修复迁移逻辑
+Services/Core/LoanService.cs      — GetLoan/GetCompanyLoans 按 OriginalName 匹配
+Services/Abstractions/ILoanService.cs — 接口改为接受 CompanyDefinition
+Domain/CropDataRecord.cs          — DisplayName 改为运行时 I18n.Get(NameKey)
+Services/Core/CropDataProvider.cs — 所有作物改用 NameKey 替代 DisplayName init
+UI/BankMenu.cs                    — 传入金额参数到 i18n 模板
+i18n/default.json                 — 短标签 + {amount} 占位符
+i18n/zh.json                      — {amount} 占位符 + "14天" → "长期"

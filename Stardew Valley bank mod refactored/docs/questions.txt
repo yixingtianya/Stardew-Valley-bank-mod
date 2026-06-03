@@ -1,0 +1,40 @@
+因为整个检测逻辑和原版事件**没有任何因果绑定**。
+
+## 时序问题
+
+在 `OnUpdateTicked` 里，每 15 帧执行一次 `DetectRouteCompletion()`：
+
+```
+hasOrWillReceiveMail("JojaMember")  →  true（旧存档上买过会员）
+→ 设 _pendingRouteDetection = true
+→ 同一帧检查 Game1.CurrentEvent
+```
+
+这个检测是**主动轮询**，不是被动回调。它不关心原版事件是否正在播放、是否即将开始、是否已经结束。它只看一件事：`hasOrWillReceiveMail` 返回了什么。
+
+## 你说的场景还原
+
+玩家完成所有献祭包 → 进 JojaMart → 触发原版 Joja 事件：
+
+```
+原版代码内部顺序：
+  1. mailReceived.Add("JojaMember")    ← 标志立刻生效
+  2. 然后调用 startEvent(...)          ← 事件排队，下一帧才渲染
+```
+
+而你的 OnUpdateTicked 在 **步骤 1 和步骤 2 之间**（或之后的极短窗口内）检测到 `hasOrWillReceiveMail("JojaMember")` 为 true → 直接触发 `ShowDialogueLines`。
+
+由于 `ShowDialogueLines` 里做的操作是：
+
+```csharp
+npc.CurrentDialogue.Clear();     // 清空 Morris 对话队列
+Game1.drawDialogue(npc);         // 用空队列画对话
+```
+
+Morris 的对话队列被清空了，然后调用 `drawDialogue` 画了个空的。原版事件紧接着要启动时，Morris 的对话状态已经被你破坏了，所以原版事件的显示也出了问题。
+
+## 一句话总结
+
+**不是"原版事件结束后触发你的对话"，而是你的对话抢先触发了——因为 `hasOrWillReceiveMail` 在标志被设置的瞬间就返回 true，比原版事件启动还快，然后 `Clear()` 把 Morris 的对话队列清空，直接干扰了原版事件。**
+
+真正的事件续接需要的是：**监听原版事件的结束**，而不是轮询邮件标志。

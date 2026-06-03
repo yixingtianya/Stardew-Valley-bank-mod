@@ -1,0 +1,130 @@
+Stardew Valley bank mod refactored/
+├── Domain/                    ← 值对象、枚举 (无依赖)
+│   ├── CompanyId.cs           ← 强类型公司ID
+│   ├── CompanyStatus.cs       ← 公司状态枚举
+│   ├── CropDataRecord.cs      ← 作物数据记录 (V3.5 patch5) ⭐阶段六
+│   └── InterestCalculationContext.cs ← 利率计算上下文
+├── Services/
+│   ├── Abstractions/          ← 10个核心接口 (契约层)
+│   │   ├── IInterestCalculator.cs      ← 利率计算接口
+│   │   ├── ICompanyManager.cs          ← 公司管理接口
+│   │   ├── IDepositLimitProvider.cs    ← 存款上限接口
+│   │   ├── IBankAccountService.cs      ← 账户服务接口
+│   │   ├── ILoanService.cs             ← 贷款服务接口 (桩实现)
+│   │   ├── IFuelService.cs             ← 燃料服务接口 (桩实现)
+│   │   ├── IBankruptcyHandler.cs       ← 破产处理接口 (桩实现)
+│   │   ├── ICreditLimitService.cs      ← 借款上限接口 (桩实现)
+│   │   ├── IMessageScheduler.cs        ← 消息调度接口 (桩实现)
+│   │   └── ISeasonalFruitMarket.cs     ← 季节果实市场接口 (桩实现)
+│   └── Core/                  ← 具体实现
+│       ├── Interest/
+│       │   ├── FixedCompanyInterestStrategy.cs   ← 固定公司利率策略 ✅
+│       │   └── DynamicCompanyInterestStrategy.cs ← 动态公司利率策略 ✅ (V3.5 patch5)
+│       ├── CompanyManager.cs           ← 公司管理实现 ✅
+│       ├── CropDataProvider.cs         ← 作物利率/燃料数据源 (V3.5 patch5) ⭐阶段六
+│       ├── DepositLimitProvider.cs     ← 存款上限实现 ✅
+│       ├── BankAccountService.cs       ← 账户服务实现 ✅
+│       ├── ModServices.cs              ← 服务注册中心 (手动DI)
+│       ├── LoanService.cs              ← 贷款服务 (桩)
+│       ├── FuelService.cs              ← 燃料服务 (桩)
+│       ├── BankruptcyHandler.cs        ← 破产处理 (桩)
+│       ├── CreditLimitService.cs       ← 借款上限 (桩)
+│       ├── MessageScheduler.cs         ← 消息调度 (桩)
+│       └── SeasonalFruitMarket.cs      ← 季节果实市场 (桩)
+├── Data/                      ← 数据模型
+│   ├── ModConfig.cs           ← 配置定义
+│   ├── BankAccountData.cs     ← 账户数据结构
+│   └── BankAccountManager.cs  ← 账户持久化管理
+├── UI/                        ← 界面层
+│   ├── BankMenu.cs            ← 主银行界面
+│   ├── BankChoiceMenu.cs      ← 手机入口选择
+│   ├── NumberInputMenu.cs     ← 数字输入键盘
+│   └── MailboxDialog.cs       ← 邮箱对话框 (未激活)
+├── BankMod.cs                 ← 入口类 (SMAPI事件绑定)
+├── BankMailbox.cs             ← 物理邮箱物体 (未使用)
+├── PhoneItem.cs               ← 手机物品常量
+├── I18n.cs                    ← 国际化翻译
+├── manifest.json              ← Mod清单 v2.0.0
+└── BankMod.csproj             ← 项目文件
+
+═══════════════════════════════════════════════════════════════════
+📋 开发文档索引
+═══════════════════════════════════════════════════════════════════
+
+开始开发
+    ↓
+[index.txt] ──→ 确定当前阶段 + 查什么
+    ↓
+    ├──→ [value2.txt] ──→ 查具体数值（利率/上限/机制）⭐唯一事实源
+    ├──→ [Crops values.txt] ──→ 查作物利率/燃料（Y/D_base/Smax）⭐阶段六数据源
+    ├──→ [demand.txt] ──→ 查详细开发步骤（12阶段）
+    ├──→ [架构重构报告 V2.0.txt] ──→ 查接口实现状态
+    └──→ [project guide.txt] ──→ 查文件位置（本文件）
+                ↓
+        打开代码实现
+
+═══════════════════════════════════════════════════════════════════
+🔍 快速寻址表
+═══════════════════════════════════════════════════════════════════
+
+需求                          接口/文件                          实现位置
+─────────────────────────────────────────────────────────────────────────────
+计算存款利率                   IInterestCalculator                 Services/Core/Interest/
+                               .CalculateDepositRate()             FixedCompanyInterestStrategy.cs
+
+计算贷款利率                   IInterestCalculator                 Services/Core/Interest/
+                               .CalculateLoanRate()                FixedCompanyInterestStrategy.cs
+
+获取公司列表                   ICompanyManager                     Services/Core/
+                               .GetActiveCompanies()               CompanyManager.cs
+
+获取存款上限                   IDepositLimitProvider               Services/Core/
+                               .GetDepositLimit()                  DepositLimitProvider.cs
+
+结算每日利息                   CompanyManager                      Services/Core/
+                               .SettleDailyInterest()              CompanyManager.cs
+
+公司状态枚举                   CompanyStatus                       Domain/
+                                                                   CompanyStatus.cs
+
+公司ID类型                     CompanyId                           Domain/
+                                                                   CompanyId.cs
+
+GMCM配置验证                   BankMod.RegisterModConfig()         BankMod.cs
+                               save回调中自动修正利率
+
+═══════════════════════════════════════════════════════════════════
+⚠️  GMCM利率验证机制
+═══════════════════════════════════════════════════════════════════
+
+位置: BankMod.cs → RegisterModConfig() → save回调
+
+行为:
+  1. 用户点击"保存"或"保存并退出"
+  2. 检查: 贷款利率 < 存款利率 ?
+  3. 如果是 → 自动修正贷款利率 = 存款利率
+  4. 显示红字警告: "[配置已修正] Joja:贷≥存(X.X%)"
+  5. 强制关闭GMCM菜单 (Game1.exitActiveMenu())
+  6. 用户必须重新打开菜单才能继续
+
+目的: 阻止非法配置被保存，确保贷≥存
+
+═══════════════════════════════════════════════════════════════════
+📁 项目状态
+═══════════════════════════════════════════════════════════════════
+
+当前项目: Stardew Valley bank mod refactored
+编译输出: BankModRefactored.dll
+部署位置: D:\steam\steamapps\common\Stardew Valley\Mods\BankMod\
+
+旧项目: Stardew Valley bank mod (no work) ← 已弃用
+
+═══════════════════════════════════════════════════════════════════
+🚀 编译命令
+═══════════════════════════════════════════════════════════════════
+
+dotnet build "f:\agency-agents-main\Stardew Valley bank mod refactored\BankMod.csproj" -c Release
+
+或
+cd "f:\agency-agents-main\Stardew Valley bank mod refactored"
+dotnet build -c Release

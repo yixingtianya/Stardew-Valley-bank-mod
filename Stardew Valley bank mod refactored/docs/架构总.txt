@@ -1,0 +1,3304 @@
+
+--
+
+架构定稿整合分析 V3.1 补完版
+
+一、三版文档角色定位
+
+文档 角色 核心贡献
+架构 V1.0 初始蓝图 确立分层架构、模块划分、接口驱动、依赖注入基调
+架构 V2.0 业务建模补全 新增 MessageScheduler、SeasonalFruitMarket、CreditLimitService 等独立领域服务；明确 value2.docx 为单一事实源
+架构 V3.0 补漏与冲突修正 补全复利冷却、状态乘数、存款上限多元决定、倒闭冷却封锁；解决 Interest 与 Company 循环依赖；强化依赖纯洁性
+架构 V3.1 业务细节补完 补全燃料模块职责、公司生成创始股本、等效支出公式、保护期状态、季节过渡参数、季节初果实购买联动
+
+执行层混乱根因： V2.0 和 V3.0 并存时，开发者不清楚应以哪个为准。核心问题是 V3.0 的声明——"本架构文档确认 value2.docx V3.0 为唯一事实源"——应在项目启动前被显式确认。
+
+---
+
+二、关键规则溯源：谁说了算
+
+根据 V3.0 的真理源裁决，当任何文档间存在冲突时：
+
+冲突领域 value.txt (V1.0) value2.docx (V3.0) 裁决结果
+固定公司存款利率 皮3.0%/J5.0% 皮1.5%/J2.5% 以 value2.docx 为准
+固定公司贷款利率 皮5.0%/J8.0% 皮2.5%/J4.0% 以 value2.docx 为准
+复利冷却时间 无 112天（1自然年） 以 value2.docx 为准
+繁荣期日倒闭概率 未定义 可配置五档（15%-50%年风险） 以 value2.docx 为准
+濒死保护期【V3.8 废弃】 无 7天重组期（已废弃：燃料=0立即倒闭） 以 value2.docx 为准
+存款上限计算 固定值 多元动态决定（基础×2，繁荣+20%等） 以 value2.docx 为准
+作物倒闭冷却 无 当前季节（同一季节实例） 以 value2.docx 为准
+等效支出公式 无 等效支出 = 作物售价÷出种率×单次出种数 以 value2.docx 为准
+创始股本 无 10~50个（可配置） 以 value2.docx 为准
+新公司保护期 无 14天 以 value2.docx 为准
+
+结论： value.txt 的所有数值已被 value2.docx V3.0 全面覆盖并修正，开发时 value.txt 仅作早期设计参考，不可作为实现依据。
+
+---
+
+三、架构定稿：核心设计决策（不可推翻）
+
+以下决策来自 V3.0，是开发中必须遵守的硬约束：
+
+3.1 依赖纯洁性原则（最高优先级）
+
+```
+✅ 正确：Company → 传入 CompanyStatus → Interest
+❌ 错误：Interest → 反向调用 ICompanyManager 获取状态
+```
+
+· IInterestCalculator.CalculateDepositRate 必须接收 CompanyStatus status 参数
+· FixedCompanyInterestStrategy 和 DynamicCompanyInterestStrategy 实现此接口
+· 严禁 Interest 模块内部调用 ICompanyManager
+
+3.2 复利冷却机制
+
+· 动态公司复利到期后，进入 112 天冷却期（一个完整星露谷年）
+· 冷却期内强制单利结算
+· 公司倒闭后重生，冷却期仍继续计时
+· 此逻辑在 ICompanyManager 中管理冷却状态，在 IInterestCalculator 中执行冷却判定
+
+3.3 状态乘数体系
+
+公司状态 利率乘数 存款上限修正
+繁荣期 (>150%) ×1.2 基础×2 + 20%
+稳定期 (80%-150%) ×0.9 基础×2
+饥饿期 (30%-80%) ×0.7 半锁（50%）
+濒死期 (<30%) ×0.4 清空（0）
+
+3.4 存款上限多元决定
+
+IDepositLimitProvider 必须显式依赖 ICompanyManager 获取状态，应用所有修正因子。
+
+3.5 作物倒闭冷却封锁【V3.8 修正】
+
+· 公司倒闭后，同作物在当前季节（同一季节实例）内无法重新生成
+· 跨季自动解除冷却（如春季倒闭→夏季即可重新生成）
+· ICompanyManager.IsCropOnBankruptcyCooldown(cropId) 在公司生成前置校验中被调用
+
+3.6 【V3.1 补完】等效支出公式（动态公司利率锚定）
+
+动态公司基础日利率必须锚定作物的真实经济回报，公式如下：
+
+```
+等效支出 = 作物售价 ÷ 出种率 × 单次出种数
+基础日利率 R = 日收益 ÷ 等效支出
+```
+
+存款利率衰减规则（V3.5 patch5 修正）：
+
+R 区间 存款利率计算 贷款日利率
+R > 20% 存款利率 = R × 0.5 R × 0.75
+0% < R ≤ 20% 存款利率 = R（不衰减） R × 1.5
+R ≤ 0% 存款利率 = 0%（钳位） 0%（钳位）
+
+· 贷款利率硬下限 +1%。
+· 存贷差始终大于 50%，无套利空间。
+· GMCM 已实现主动拦截：滑动条实时钳制（存≤贷）+ 保存时拒绝写入（非法值不写盘、恢复旧配置、醒目红字报错）。
+· 加工品不计入等效支出计算。
+
+3.7 【V3.1 补完】新公司保护期
+
+· 动态公司生成后，进入 14 天保护期
+· 保护期内：豁免所有倒闭条件检测（连续无出货、利率持续为负、存款枯竭均不触发）
+· 保护期内：利率计算正常执行，可存款/取款/借款
+· 保护期结束后：正常参与每日倒闭条件检测
+
+---
+
+四、模块职责定稿（V3.1 最终版）
+
+模块 职责 关键新增（V3.0） V3.1 补完
+Company 生命周期管理、状态变迁、倒闭判定、季节过渡 复利冷却状态管理、按作物倒闭冷却封锁检查 新公司保护期豁免倒闭检测
+Interest 日利率计算（策略模式） 接收公司状态参数、应用状态乘数、管理复利冷却执行逻辑 等效支出公式应用于动态公司利率
+DepositLimitProvider 存款上限动态计算 显式依赖 ICompanyManager 获取状态、应用多元修正因子 -
+Fuel 燃料需求/供给、满足率计算 - 【V3.1 新增】每日燃料需求计算、满足率区间判定、状态系数应用、过渡期专用计算策略
+MessageScheduler 金融消息引擎 每季真/假消息配额、三幕剧节奏、临时倒闭概率 -
+SeasonalFruitMarket 季节初果实购买 上架清单、溢价计算、出货计数计入公司诞生进度 购买后出货可加速对应公司诞生
+CreditLimitService 全局借款上限 净资产计算、杠杆系数、固定/动态额度分配 -
+Bankruptcy 破产/清算/注资救市 资产核查、强制划扣、保护期、注资上限计算 -
+
+Fuel 模块职责定义【V3.1 新增】：
+
+· 每日燃料需求计算：需求 = 种植总株数 × 基础维持系数 × 状态系数
+· 基础维持系数：按作物类型配置（上古水果 0.15、啤酒花 0.8、蓝莓 0.3 等）
+· 状态系数：繁荣×1.0、稳定×0.8、饥饿×0.5、濒死×0.3
+· 燃料满足率：满足率 = 当日实际供应数 ÷ 需求数
+· 公司状态判定：根据满足率区间映射对应状态
+· 过渡期策略：季节过渡期内使用专用计算逻辑
+
+---
+
+五、每日结算流程定稿（V3.1 补充后）
+
+```
+1. 游戏适配器捕获时间、天气、运气
+2. 【V3.1】FuelService 更新燃料需求与满足率 → 判定公司状态区间
+3. 【V3.1】对于保护期内的新公司，跳过倒闭条件检测
+4. CompanyManager 检测倒闭条件 → 若倒闭，按状态阶梯返还存款【V3.3.2】
+5. 【V3.0】CompanyManager 传入公司状态参数
+6. InterestCalculator 计算日利率（应用状态乘数）
+7. LoanService.DailyTick()：扣息、到期扣款、宽限期处理
+8. BankruptcyHandler.CheckBankruptcyStatus()
+9. 【V3.0】AccountService 计息前检查复利冷却 →
+   若在冷却期，强制单利结算，推进冷却计时
+10. AccountService.CreditInterest()：应用状态乘数计算利息
+11. 【V3.0】CompanyManager.OnDayStarted()：
+    检查新公司生成条件时，前置校验 IsCropOnBankruptcyCooldown
+    【V3.1】检查是否达到创始股本阈值（10~50个累计出售量）
+12. 持久化所有变更数据
+13. 触发 UI 刷新事件
+```
+
+---
+
+六、新增领域事件（V3.0 + V3.1）
+
+V3.0 原有：
+
+· CompanyCompoundInterestCooldownStartedEvent
+· CompanyBankruptcyCooldownStartedEvent
+· CompanyBankruptcyCooldownEndedEvent
+
+【V3.1 新增：】
+
+· CompanyProtectionPeriodStartedEvent — 新公司保护期开始
+· CompanyProtectionPeriodEndedEvent — 新公司保护期结束
+· CompanyFoundingCapitalMetEvent — 创始股本阈值达成
+· SeasonalFruitPurchasedEvent — 季节初果实购买事件（计入公司诞生进度）
+
+---
+
+七、项目结构定稿（V3.1）
+
+```
+DynamicFinanceMod/
+├── src/
+│   ├── Domain/
+│   │   ├── ValueObjects/
+│   │   │   ├── SeasonTransitionStatus.cs
+│   │   │   ├── CompanyCompoundInterestStatus.cs   // V3.0 新增
+│   │   │   ├── CompanyProtectionStatus.cs         // 【V3.1 新增】保护期状态
+│   │   │   └── FuelSatisfactionStatus.cs          // 【V3.1 新增】燃料满足率
+│   │   └── ...
+│   ├── Services.Abstractions/
+│   │   ├── IMessageScheduler.cs
+│   │   ├── ISeasonalFruitMarket.cs
+│   │   ├── ICreditLimitService.cs
+│   │   ├── IDepositLimitProvider.cs
+│   │   ├── IFuelService.cs                        // 【V3.1 新增】
+│   │   └── ...
+│   ├── Messages/                                  // 【V3.3 新增】联机消息协议
+│   │   ├── BankOperationRequest.cs                // 客机金融操作请求
+│   │   └── BankDataSync.cs                        // 主机数据同步广播
+│   ├── Services.Core/
+│   │   ├── CompanyManager.cs                      // 修改：增加冷却状态管理、保护期逻辑
+│   │   ├── FuelService.cs                         // 【V3.1 新增】燃料需求/满足率计算
+│   │   ├── AssetPoolService.cs                    // 【V3.3.1 新增】资产池计算与取款限制逻辑
+│   │   ├── Interest/
+│   │   │   ├── FixedCompanyInterestStrategy.cs    // 修改：增加状态乘数、冷却逻辑
+│   │   │   └── DynamicCompanyInterestStrategy.cs  // 修改：等效支出公式、状态乘数、冷却逻辑
+│   │   └── ...
+│   ├── Infrastructure/
+│   │   ├── DepositLimitProvider.cs                // 修改：实现多元决定逻辑
+│   │   └── ...
+│   └── ...
+└── ...
+```
+
+---
+
+九、核心接口完整定义（C# 代码）
+
+9.1 ICompanyManager（V3.1 最终版）
+
+```csharp
+public interface ICompanyManager
+{
+    // === 基础查询 ===
+    Company GetCompany(CompanyId id);
+    IEnumerable<Company> GetActiveCompanies();
+    CompanyStatus GetStatus(CompanyId id);
+
+    // === 生命周期管理 ===
+    void OnDayStarted(); // 检查生成、季节过渡、倒闭判定、冷却封锁、保护期
+    void AddSupply(ItemId cropId, int quantity, bool isShippingBin);
+    void InjectCapital(CompanyId id, decimal amount);
+
+    // === 季节过渡 ===
+    void BeginSeasonTransition();
+    void FinalizeSeasonTransition();
+    SeasonTransitionStatus GetTransitionStatus(CompanyId id);
+
+    // === [V3.0] 倒闭冷却封锁 ===
+    bool IsCropOnBankruptcyCooldown(CropId cropId);
+
+    // === [V3.1] 新公司保护期 ===
+    /// <summary>
+    /// 查询指定公司是否处于新公司保护期（生成后14天内）
+    /// </summary>
+    bool IsInProtectionPeriod(CompanyId companyId);
+
+    /// <summary>
+    /// 获取保护期剩余天数（已过期返回0）
+    /// </summary>
+    int GetProtectionPeriodRemainingDays(CompanyId companyId);
+
+    // === [V3.1] 创始股本 ===
+    /// <summary>
+    /// 检查指定作物是否已达到创始股本阈值
+    /// </summary>
+    bool IsFoundingCapitalMet(CropId cropId);
+
+    /// <summary>
+    /// 获取创始股本进度（当前累计出售数 / 阈值）
+    /// </summary>
+    (int current, int threshold) GetFoundingCapitalProgress(CropId cropId);
+
+    // === [V3.0] 复利冷却管理 ===
+    bool IsCompoundInterestCoolingDown(CompanyId companyId);
+    void StartCompoundInterestCooldown(CompanyId companyId, int durationDays);
+
+    // === 事件 ===
+    event EventHandler<CompanyStateChangedEventArgs> StateChanged;
+    event EventHandler<CompanyBankruptedEvent> CompanyBankrupted;
+    event EventHandler<CompanyCompoundInterestCooldownStartedEvent> CompoundInterestCooldownStarted;
+    event EventHandler<CompanyBankruptcyCooldownStartedEvent> BankruptcyCooldownStarted;
+    event EventHandler<CompanyBankruptcyCooldownEndedEvent> BankruptcyCooldownEnded;
+    event EventHandler<CompanyProtectionPeriodStartedEvent> ProtectionPeriodStarted;    // 【V3.1】
+    event EventHandler<CompanyProtectionPeriodEndedEvent> ProtectionPeriodEnded;        // 【V3.1】
+    event EventHandler<CompanyFoundingCapitalMetEvent> FoundingCapitalMet;              // 【V3.1】
+}
+```
+
+---
+
+9.2 IInterestCalculator（V3.0 不变，补充等效支出约束说明）
+
+```csharp
+public interface IInterestCalculator
+{
+    /// <summary>
+    /// 计算存款日利率。
+    /// [V3.0] 必须由调用方传入 CompanyStatus，严禁内部调用 ICompanyManager
+    /// [V3.1] 动态公司基础利率锚定等效支出公式计算
+    /// </summary>
+    decimal CalculateDepositRate(CompanyId companyId, CompanyStatus status, MarketContext context);
+
+    /// <summary>
+    /// 计算贷款日利率。
+    /// </summary>
+    decimal CalculateLoanRate(CompanyId companyId, CompanyStatus status, MarketContext context);
+
+    InterestResult ComputeDailyInterest(Account account, Company company, CompanyStatus status, int days);
+
+    void UpdateCompoundInterestCooldown(CompanyId companyId, int elapsedDays);
+    bool IsInCompoundInterestCooldown(CompanyId companyId);
+}
+
+public class MarketContext
+{
+    public decimal LuckValue { get; init; }
+    public WeatherType Weather { get; init; }
+    public int ConsecutiveShippingDays { get; init; }
+    public int SuppressionStacks { get; init; }
+    public int SuppressionRemainingDays { get; init; }
+}
+
+public enum CompanyStatus
+{
+    Prosperous = 0,     // 繁荣期（>150% 满足率）
+    Stable = 1,         // 稳定期（80%-150%）
+    Hungry = 2,         // 饥饿期（30%-80%）
+    Dying = 3,          // 濒死期（<30%）
+    Restructuring = 4,  // 濒死保护期（7天重组）
+    Protected = 5,      // 【V3.1 新增】新公司保护期（3天，豁免倒闭检测）
+    Retired = 6,        // 光荣退休
+    Bankrupted = 7      // 已倒闭
+}
+```
+
+状态乘数（V3.1 补充 Protected 状态）：
+
+```csharp
+decimal statusMultiplier = status switch
+{
+    CompanyStatus.Prosperous => 1.2m,
+    CompanyStatus.Stable => 0.9m,
+    CompanyStatus.Protected => 0.9m,    // 等同稳定期
+    CompanyStatus.Hungry => 0.7m,
+    CompanyStatus.Dying => 0.4m,
+    CompanyStatus.Restructuring => 0m,  // 重组期利率归零
+    _ => 1.0m
+};
+```
+
+等效支出公式（DynamicCompanyInterestStrategy 内部实现约束，V3.5 patch5 修正）：
+
+```csharp
+// 【V3.1】动态公司基础利率必须锚定等效支出公式
+decimal equivalentCost = cropSellPrice / reseedRate × seedsPerHarvest;
+decimal baseDailyRate = dailyProfit / equivalentCost;
+
+// 存款利率衰减规则（V3.5 patch5 修正：移除线性衰减）
+decimal depositRate = baseDailyRate switch
+{
+    > 0.20m => baseDailyRate × 0.5m,
+    > 0     => baseDailyRate,         // 0% < R ≤ 20%: 不打折
+    _       => 0                      // R ≤ 0%: 钳位
+};
+
+// 贷款利率规则（V3.5 patch5 修正）
+decimal loanRate = baseDailyRate switch
+{
+    > 0.20m => baseDailyRate × 0.75m,
+    > 0     => baseDailyRate × 1.5m,  // 0% < R ≤ 20%: 贷款上浮
+    _       => 0                      // R ≤ 0%: 钳位
+};
+loanRate = Math.Max(0.01m, loanRate); // 硬下限 +1%
+```
+
+---
+
+9.8 【V3.1 新增】IFuelService
+
+```csharp
+public interface IFuelService
+{
+    /// <summary>
+    /// 计算指定公司当日的燃料需求
+    /// 需求 = 种植总株数 × 基础维持系数 × 状态系数
+    /// </summary>
+    int CalculateDailyFuelRequirement(CompanyId companyId);
+
+    /// <summary>
+    /// 记录当日实际燃料供应（玩家通过出货箱运往公司的作物数量）
+    /// </summary>
+    void RecordDailyFuelSupply(CompanyId companyId, int supplyQuantity);
+
+    /// <summary>
+    /// 计算燃料满足率
+    /// 满足率 = 当日实际供应数 ÷ 需求数
+    /// </summary>
+    decimal CalculateSatisfactionRate(CompanyId companyId);
+
+    /// <summary>
+    /// 根据满足率判定公司状态区间
+    /// </summary>
+    CompanyStatus DetermineCompanyStatus(decimal satisfactionRate, bool isInProtectionPeriod);
+
+    /// <summary>
+    /// 获取作物基础维持系数
+    /// </summary>
+    /// <returns>每株每天所需作物数量</returns>
+    decimal GetBaseMaintenanceCoefficient(CropId cropId);
+
+    /// <summary>
+    /// 获取当前状态系数
+    /// </summary>
+    decimal GetStatusCoefficient(CompanyStatus status);
+
+    // === 【V3.3 新增】燃料库存操作（FP 整数化） ===
+    /// <summary>
+    /// 记录出货箱卖出作物（+FP）。铱星额外 +10FP，金星额外 +5FP。
+    /// </summary>
+    void RecordShippingBinSale(CompanyId companyId, int quantity, CropQuality quality);
+
+    /// <summary>
+    /// 记录在皮埃尔/Joja 购买对应作物（-FP）。每购买1个 -5FP。
+    /// </summary>
+    void RecordExternalPurchase(CompanyId companyId, int quantity);
+
+    /// <summary>
+    /// 记录在皮埃尔/Joja 卖出对应作物（-FP）。每卖出1个 -5FP。
+    /// </summary>
+    void RecordExternalSale(CompanyId companyId, int quantity);
+
+    /// <summary>
+    /// 获取 UI 展示用燃料库存（FP ÷ 10，1 位小数）。
+    /// </summary>
+    decimal GetDisplayFuelStock(CompanyId companyId);
+}
+
+// 燃料常量（V3.3 新增）
+public static class FuelConstants
+{
+    public const int FuelPointsPerCrop = 10;         // 1 标准作物 = 10 FP
+    public const int ShippingBinBaseBonus = 10;      // 出货箱基础加成 +10 FP
+    public const int IridiumExtraBonus = 10;         // 铱星额外 +10 FP（总计 +20）
+    public const int GoldExtraBonus = 5;             // 金星额外 +5 FP（总计 +15）
+    public const int ExternalPurchasePenalty = 5;    // 购买打压 -5 FP/个
+    public const int ExternalSalePenalty = 5;        // 商店卖出打压 -5 FP/个
+}
+
+// 基础维持系数速查（来自 value2 §8.1）
+public static class FuelCoefficients
+{
+    public const decimal AncientFruit = 0.15m;   // 上古水果
+    public const decimal Hops = 0.8m;            // 啤酒花
+    public const decimal Blueberry = 0.3m;       // 蓝莓/蔓越莓
+    public const decimal Starfruit = 0.2m;       // 杨桃
+    public const decimal Regular = 0.15m;        // 其他常规作物（0.15~0.3）
+}
+
+// 状态系数（来自 value2 §8.1）
+public static class StatusCoefficients
+{
+    public const decimal Prosperous = 1.0m;
+    public const decimal Stable = 0.8m;
+    public const decimal Hungry = 0.5m;
+    public const decimal Dying = 0.3m;
+    public const decimal Protected = 0.8m;  // 保护期等同稳定
+}
+```
+
+---
+
+9.7 ISeasonalFruitMarket（V3.0 原有，V3.1 补充联动说明）
+
+```csharp
+public interface ISeasonalFruitMarket
+{
+    IEnumerable<SeasonalFruitOffering> GetAvailableFruits();
+    PurchaseResult PurchaseFruit(ItemId fruitId, int quantity);
+    bool IsPurchaseWindowActive();  // 每季前三天
+
+    // 【V3.1 新增】
+    /// <summary>
+    /// 获取购买果实后出货时计入公司诞生进度的数值
+    /// </summary>
+    int GetContributionToCompanyBirth(ItemId fruitId);
+
+    /// <summary>
+    /// 购买窗口剩余天数（0 = 窗口已关闭）
+    /// </summary>
+    int GetPurchaseWindowRemainingDays();
+}
+
+public class SeasonalFruitOffering
+{
+    public ItemId FruitId { get; init; }
+    public string FruitName { get; init; }
+    public decimal BasePrice { get; init; }
+    public decimal PremiumPrice { get; init; }       // 皮埃尔/Joja 加价后价格（溢价20%~50%）
+    public int AvailableQuantity { get; init; }      // 每季15~30个
+    public int ContributionToCompanyBirth { get; init; } // 占诞生所需数量的30%~60%
+}
+```
+
+---
+
+十、配置参数定稿表（锚定 value2.docx V3.0 + V3.1 补完）
+
+10.1 固定公司参数
+
+参数 皮埃尔 Joja 允许范围 来源
+存款日利率 1.5% 2.5% 固定 value2 §1.1
+贷款日利率 2.5% 4.0% 固定 value2 §1.1
+存款上限 1,000,000g 2,000,000g 100,000 ~ 10,000,000 value2 §1.1
+贷款上限 200,000g 300,000g 50,000 ~ 1,000,000 value2 §1.1
+还款周期选项 7天 / 14天 7天 / 14天 固定 value2 §1.1
+14天周期利率折扣 0.5% 0.5% 0% ~ 2% value2 §1.1
+计息方式 单利（锁定） 单利（锁定） 不可变 value2 §2
+
+10.2 动态公司参数
+
+参数 推荐值 允许范围 来源
+等效支出公式 作物售价÷出种率×单次出种数 固定公式 value2 §1.2
+存款系数 R×0.5 (R>20%) / 线性衰减 (10%-20%) / R×1 (<10%) 固定公式 value2 §1.2
+贷款系数 R×0.75 (R>20%) / R×1.5 (R<10%) 固定公式 value2 §1.2
+复利持续时限 14天（可配置） 10 ~ 21天 value2 §2
+复利冷却时间 112天（1自然年） 固定 value2 §2
+债务计息方式 单利（锁定） 不可变 value2 §2
+生成所需累计出售量 50个（可配置） 10 ~ 50 value2 §7
+总席位上限 4个 固定 value2 §7
+单季新增上限 2个 固定 value2 §7
+倒闭后冷却时间 当前季节（同一季节实例） 固定 value2 §7
+【V3.1】新公司保护期 14天 固定 value2 §7
+【V3.1】创始所需作物量 10~50个（可配置） 10~50 value2 §7
+
+10.3 利率浮动参数
+
+参数 推荐值 允许范围 来源
+运气强度系数 2.5 1.0 ~ 5.0 value.txt（value2 未覆盖，保留）
+连续售卖加成（存款） +0.5%/天 0% ~ +1.0%/天 value.txt
+连续售卖加成上限（存款） +5.0% 0% ~ +10.0% value.txt
+连续售卖加成（贷款） +1.0%/天 0% ~ +2.0%/天 value.txt
+连续售卖加成上限（贷款） +10.0% 0% ~ +20.0% value.txt
+停售衰减（存款） -0.5%/天 0% ~ -1.0%/天 value.txt
+停售衰减（贷款） -1.0%/天 0% ~ -2.0%/天 value.txt
+打压最大跌幅（50+个） -2.0% 0% ~ -5.0% value.txt
+打压持续天数 5天 1 ~ 14天 value.txt
+打压最大叠层数 3层 1 ~ 5层 value.txt
+
+10.4 公司状态与风险参数（V3.0 核心 + V3.1 补完）
+
+参数 推荐值 允许范围 来源
+繁荣期满足率阈值 150% 固定 value2 §3.1
+稳定期满足率区间 80% ~ 150% 固定 value2 §3.1
+饥饿期满足率区间 30% ~ 80% 固定 value2 §3.1
+濒死期满足率区间 <30% 固定 value2 §3.1
+状态利率乘数：繁荣 ×1.2 固定 value2 §3.1
+状态利率乘数：稳定 ×0.9 固定 value2 §3.1
+【V3.1】状态利率乘数：保护期 ×0.9（等同稳定） 固定 value2 §3.1
+状态利率乘数：饥饿 ×0.7 固定 value2 §3.1
+状态利率乘数：濒死 ×0.4 固定 value2 §3.1
+【V3.1】状态系数（燃料需求）：繁荣 ×1.0 固定 value2 §8
+【V3.1】状态系数：稳定 ×0.8 固定 value2 §8
+【V3.1】状态系数：饥饿 ×0.5 固定 value2 §8
+【V3.1】状态系数：濒死 ×0.3 固定 value2 §8
+繁荣年倒闭风险（默认） 30% 15%/22%/30%/40%/50% value2 §3.2
+稳定期日概率联动 繁荣日概率 × 0.3 不可单改 value2 §3.2
+饥饿期日倒闭概率 5%（固定） 固定 value2 §3.2
+濒死期日倒闭概率 15%（固定） 固定 value2 §3.2
+濒死保护期（重组期） 7天 固定 value2 §3.3
+重组期内倒闭概率 0% 固定 value2 §3.3
+重组期内利率 归零 固定 value2 §3.3
+休闲模式 关闭 开启/关闭 value2 §4.4
+
+【V3.1 新增】10.8 燃料机制参数
+
+参数 推荐值 允许范围 来源
+上古水果维持系数 0.15个/株·天 固定 value2 §8
+啤酒花维持系数 0.8个/株·天 固定 value2 §8
+蓝莓/蔓越莓维持系数 0.3个/株·天 固定 value2 §8
+杨桃维持系数 0.2个/株·天 固定 value2 §8
+其他常规作物维持系数 0.15~0.3 依生长周期动态 value2 §8
+状态系数：繁荣 ×1.0 固定 value2 §8
+状态系数：稳定 ×0.8 固定 value2 §8
+状态系数：饥饿 ×0.5 固定 value2 §8
+状态系数：濒死 ×0.3 固定 value2 §8
+创始股本 10~50个（可配） 10~50 value2 §8.2
+
+【V3.1 新增】10.9 季节初果实购买参数
+
+参数 推荐值 允许范围 来源
+购买窗口 每季前三天 固定 value2 §6
+可购买总数 15~30个 可配 value2 §6.3
+溢价幅度 20%~50% 固定 value2 §6
+诞生进度占比 30%~60% 可配 value2 §6.3
+排除作物 上古水果、杨桃、仙人掌、姜岛作物等 固定 value2 §6.2
+
+---
+
+十一、状态机流转图
+
+11.1 公司状态流转（V3.1 补完）
+
+```mermaid
+stateDiagram-v2
+    [*] --> Protected: 公司生成（创始股本达标）
+
+    Protected --> Stable: 保护期结束（14天）
+    Protected --> Protected: 保护期内（豁免倒闭检测）
+
+    Stable --> Prosperous: 满足率 > 150%
+    Stable --> Hungry: 满足率 30%-80%
+    Stable --> Bankrupted: 连续14天无出货
+    Stable --> Bankrupted: 利率持续为负5天
+
+    Prosperous --> Stable: 满足率回落至 80%-150%
+    Prosperous --> Bankrupted: 触发日倒闭概率
+
+    Hungry --> Stable: 满足率回升至 80%-150%
+    Hungry --> Dying: 满足率 < 30%
+
+    Dying --> Restructuring: 首次进入濒死（重组期7天）
+    Dying --> Bankrupted: 非首次进入濒死且触发日倒闭概率
+
+    Restructuring --> Stable: 燃料满足率回升至 ≥ 30%
+    Restructuring --> Bankrupted: 重组期结束仍未脱离
+
+    Bankrupted --> Cooldown: 进入作物倒闭冷却
+    Cooldown --> [*]: 冷却期满（下一个完整季节后）
+
+    note right of Protected: 14天保护期\n不检测倒闭条件\n利率等同稳定期(×0.9)
+    note right of Dying: 利率乘数 ×0.4\n存款上限清零\n禁止借贷
+    note right of Restructuring: 利率归零\n倒闭概率冻结\n禁止借贷
+    note right of Cooldown: 同作物无法重新生成\n持续1个完整季节
+```
+
+11.2 复利冷却状态机（V3.0 不变）
+
+```mermaid
+stateDiagram-v2
+    [*] --> Active: 复利开启（10-21天）
+
+    Active --> Active: 每日计息（复利滚入本金）
+    Active --> CoolingDown: 复利时限到期
+
+    CoolingDown --> SingleInterest: 强制单利计息
+    SingleInterest --> CoolingDown: 每日推进冷却计时
+    CoolingDown --> Active: 112天冷却期满（自动解除）
+
+    Active --> CooldownOnBankruptcy: 公司倒闭
+    CoolingDown --> CooldownOnBankruptcy: 公司倒闭
+
+    CooldownOnBankruptcy --> CoolingDown: 新公司生成（延续原冷却期）
+
+    note right of CoolingDown: 持续112天（1自然年）\n强制单利结算\n利息转入单利账户
+```
+
+11.3 破产保护状态机（V3.0 不变）
+
+```mermaid
+stateDiagram-v2
+    [*] --> Normal: 正常状态
+
+    Normal --> InterestArrears: 日扣息失败（现金不足）
+    Normal --> PrincipalDefault: 到期还款失败（现金不足）
+
+    InterestArrears --> Normal: 补足利息
+    InterestArrears --> Bankruptcy: 存款总额 < 应还总额
+
+    PrincipalDefault --> GracePeriod: 进入宽限期（1天）
+    GracePeriod --> Normal: 补足还款
+    GracePeriod --> ForcedDeduction: 宽限期结束（强制划扣）
+    ForcedDeduction --> Normal: 划扣成功
+    ForcedDeduction --> Bankruptcy: 划扣后仍不足
+
+    Bankruptcy --> Bankruptcy: 每日出货收入50%强制扣除
+    Bankruptcy --> Normal: 所有逾期债务偿清
+
+    note right of InterestArrears: 仍可借款/取款\n利息按单利/复利处理
+    note right of PrincipalDefault: 宽限期内暂停借款\n罚息 = 基础利率 + 20%
+    note right of Bankruptcy: 所有利息停止（0%）\n禁止借款/取款\n强制收入扣除
+```
+
+11.4 季节过渡状态机（V3.1 补完参数）
+
+```mermaid
+stateDiagram-v2
+    [*] --> Active: 正常运营中
+
+    Active --> Observing: 季节第1天（进入观望期3天）
+
+    Observing --> Observing: 利率随机波动 ±0.5%~2.0%/天
+    Observing --> Retired: 利率 ≥ 基础利率 且 玩家3天无出货
+    Observing --> Transformed: 利率 ≥ 基础利率 且 过渡期利率随机走强
+    Observing --> Surviving: 玩家在过渡期内有出货
+    Observing --> Liquidated: 利率 < 基础利率 且 过渡期利率走弱
+
+    Retired --> [*]: 存款/贷款保留，利率锁定不变
+    Transformed --> Active: 公司改名换作物，利率重置
+    Surviving --> Active: 照常运营
+    Liquidated --> Cooldown: 存款/贷款随机卖给皮埃尔/Joja
+
+    note right of Observing: 【V3.1】波动幅度±0.5%~2.0%\n玩家有出货→波动幅度减半\n运气值影响涨跌概率
+    note right of Retired: 移入历史列表\n利率不再变动\n无法继续存入/借出
+    note right of Transformed: 继承全部数据\n利率重置为基础值
+```
+
+---
+
+十二、开发指引与分批实现建议
+
+12.1 依阶段实现顺序
+
+阶段 对应需求步骤 依赖架构模块
+一 1.1 - 1.5 基础框架与手机 BankApp, UI
+二 2.1 - 2.4 邮件与账户数据 Account, SaveData
+三 3.1 - 3.4 固定公司存款 Company (固定), Account
+四 4.1 - 4.5 基础利率与计息 Interest (基础), Config
+五 5.1 - 5.5 贷款基础功能 Loan, Account
+六 6.1 - 6.4 动态公司诞生 Company (动态), Fuel 【V3.1】
+七 7.1 - 7.4 利率波动 Interest (策略模式), MarketContext
+八 8.1 - 8.4 破产保护 Bankruptcy, Loan
+九 9.1 - 9.5 倒闭与债券 Bond, Company
+十 10.1 - 10.4 电视金融频道 NewsSvc, MessageScheduler
+十一 11.1 - 11.2 献祭联动 Company + Config
+十二 12.1 - 12.4 借款上限 CreditLimitService
+十五 15.1 - 15.3 NPC 对话 DialogCoord, Bankruptcy
+
+12.2 V3.1 关键校验点（代码审查清单）
+
+校验项 涉及模块 严重程度
+Interest 模块未反向调用 ICompanyManager Interest, Company 致命
+CalculateDepositRate 接收 CompanyStatus 参数 Interest 致命
+【V3.1】等效支出公式正确应用于动态公司基础利率 Interest 致命
+复利冷却期内强制单利结算 Interest, Account 高
+公司生成前调用 IsCropOnBankruptcyCooldown Company 高
+【V3.1】新公司保护期内豁免倒闭检测 Company 高
+【V3.1】创始股本阈值达标才触发公司生成 Company 高
+DepositLimitProvider 显式依赖 ICompanyManager DepositLimitProvider 高
+状态乘数（×1.2/0.9/0.7/0.4）正确应用 Interest 高
+【V3.1】保护期状态乘数 ×0.9 正确应用 Interest 高
+【V3.1】FuelService 状态系数（1.0/0.8/0.5/0.3）正确 Fuel 高
+存款上限多元修正（+20%/半锁/清空） DepositLimitProvider 中
+濒死重组期利率归零、倒闭概率冻结 Bankruptcy, Company 中
+【V3.1】季节过渡期利率波动 ±0.5%~2.0% Interest 中
+【V3.1】玩家过渡期有出货时波动减半 Interest 中
+
+---
+
+十三、文档版本与维护声明
+
+项目 内容
+架构定稿版本 V3.1 补完版（整合 V1.0 + V2.0 + V3.0 + 业务细节补完）
+唯一事实源 value2.docx V3.0
+早期参考 value.txt V1.0（所有数值以 value2 为准）
+设计补充 TV.txt, dialog.txt（内容设计，非架构约束）
+V3.1 补完项 Fuel模块定义、等效支出公式、新公司保护期、创始股本、季节初果实购买联动、季节过渡参数、保护期状态枚举
+最后更新 2026-04-29
+适用版本 SMAPI 4.0+, 星露谷物语 1.6+
+
+---
+以下是 V3.2 增量补丁文档，可直接追加到 架构总 3.0.docx（V3.1）末尾，无需修改原有内容。
+
+---
+
+架构 V3.2 增量补丁（基于 V3.1 补充实现细节）
+
+版本说明：本补丁不推翻 V3.1 任何设计，仅补充 V3.1 中未明确或缺失的实现级约束，确保开发时无歧义。
+
+生效原则：凡 V3.1 与本补丁冲突处，以本补丁为准；本补丁未覆盖处，以 V3.1 为准。
+
+---
+
+补丁一：公司生成上限与冷却校验接口
+
+问题
+
+V3.1 中 ICompanyManager 缺少查询“本季已生成公司数量”以及综合校验“是否允许生成新公司”的接口，导致开发者可能忽略单季新增上限（2个）和总席位上限（4个）。
+
+新增接口
+
+在 ICompanyManager 末尾追加：
+
+```csharp
+/// <summary>
+/// 检查当前季节是否还能生成新的动态公司。
+/// 规则：总活跃公司数 < 4 且 本季已生成数 < 2。
+/// </summary>
+bool CanSpawnNewCompanyInCurrentSeason();
+
+/// <summary>
+/// 尝试为指定作物生成新公司。
+/// 内部会依次检查：
+///   1. IsCropOnBankruptcyCooldown(cropId) → true 则返回 false
+///   2. CanSpawnNewCompanyInCurrentSeason() → false 则返回 false
+///   3. 已存在同作物公司 → 返回 false
+///   4. 创始股本阈值是否达标 → 返回 false
+/// 通过后创建公司并记录本季生成数。
+/// </summary>
+bool TrySpawnCompanyForCrop(CropId cropId);
+
+/// <summary>
+/// 当前季节已成功生成的公司数量（每日开始时重置为 0）
+/// </summary>
+int GetCurrentSeasonSpawnedCompanyCount();
+```
+
+实现约束
+
+· OnDayStarted() 中，在检查新公司生成前，调用 TrySpawnCompanyForCrop 而非直接创建。
+· 每日开始时，GetCurrentSeasonSpawnedCompanyCount() 必须重置为 0（由 OnDayStarted 负责）。
+· 季度切换时，也重置该计数（已在 BeginSeasonTransition 中暗示，本补丁显式要求）。
+
+---
+
+补丁二：濒死重组期（Restructuring）操作许可明确
+
+问题
+
+V3.1 仅说明重组期内“利率归零、倒闭概率冻结、禁止借贷”，但未明确是否可以取款、是否可以注资、存款是否计息。开发者可能自行猜测导致逻辑不一致。
+
+明确规则表
+
+操作 重组期内（Restructuring） 濒死期（Dying，非首次）
+存款（增加存入） ✅ 允许 ❌ 禁止（濒死期存款上限清空）
+取款（取出存款） ✅ 允许 ❌ 禁止
+借款 ❌ 禁止 ❌ 禁止
+注资救市 ✅ 允许（上限由 IBankruptcyHandler 控制） ✅ 允许（同上）
+存款计息 ❌ 不计息（利率乘数 0） ❌ 不计息（利率乘数 0.4 但实际因存款上限清空无意义）
+贷款计息 ❌ 不计息（利率归零） ❌ 不计息（濒死期利率乘数 0.4，但贷款仍可计息？——V3.1 未禁止，本补丁明确：濒死期贷款仍按利率×0.4 计息，重组期贷款不计息）
+
+状态枚举注释补充
+
+```csharp
+/// <summary>
+/// 濒死保护期（7天重组期）
+/// 允许取款 / 允许注资 / 禁止借贷 / 不计存款利息 / 不计贷款利息
+/// </summary>
+Restructuring = 4,
+```
+
+---
+
+补丁三：金融频道临时倒闭风险的应用接口
+
+问题
+
+IMessageScheduler 可提供 TemporaryBankruptcyRisk（如真消息时 50%），但 BankruptcyHandler 没有接收此值的接口，导致临时风险无法生效。
+
+新增接口
+
+在 IBankruptcyHandler 中追加：
+
+```csharp
+/// <summary>
+/// 设置今日的临时倒闭风险乘数（覆盖正常风险计算）。
+/// 例如：传入 0.5 表示今日倒闭概率强制为 50%（无论公司状态）。
+/// 传入 null 表示取消临时覆盖，恢复标准计算。
+/// </summary>
+void SetTemporaryBankruptcyRiskOverride(decimal? riskOverride);
+```
+
+调用时序
+
+在每日结算流程（V3.1 §五）的第 4 步之前（即倒闭检测前），由 MessageScheduler 调用：
+
+```csharp
+var news = messageScheduler.GetTodaysNews();
+if (news.TemporaryBankruptcyRisk.HasValue)
+    bankruptcyHandler.SetTemporaryBankruptcyRiskOverride(news.TemporaryBankruptcyRisk);
+```
+
+倒闭检测完成后（无论是否触发），当日结束时清除覆盖：SetTemporaryBankruptcyRiskOverride(null)。
+
+---
+
+补丁四：等效支出公式的作物类型区分
+
+问题
+
+等效支出公式要求“加工品不计入”，但 MarketContext 中没有体现当前计算针对的资产类型（种子/作物/加工品）。利率计算接口 CalculateDepositRate 无法判断。
+
+修改 MarketContext 值对象
+
+在 MarketContext 中增加属性：
+
+```csharp
+public enum AssetType
+{
+    RawCrop,        // 原始作物（用于利率计算）
+    ArtisanGood,    // 加工品（不用于等效支出公式）
+    Seed            // 种子（不用于利率锚定）
+}
+
+public class MarketContext
+{
+    // ... 原有属性 ...
+    public AssetType AssetType { get; init; } = AssetType.RawCrop;
+}
+```
+
+实现约束
+
+在 DynamicCompanyInterestStrategy.CalculateDepositRate 中：
+
+· 若 context.AssetType == AssetType.ArtisanGood 或 AssetType.Seed，则不使用等效支出公式，退回到固定默认利率（如 5%，可配置）。
+· 仅在 AssetType == AssetType.RawCrop 时使用等效支出公式计算基础利率。
+
+---
+
+补丁五：保护期结束后状态迁移规则
+
+问题
+
+V3.1 状态机显示 Protected → Stable，但若保护期结束时满足率 >150%，理应进入 Prosperous 而非 Stable。
+
+明确规则
+
+保护期结束当日（即第 15 天清晨），执行以下逻辑：
+
+1. 调用 FuelService.CalculateSatisfactionRate 获取当前满足率。
+2. 根据满足率重新确定状态：
+   · >150% → Prosperous
+   · 80%~150% → Stable
+   · 30%~80% → Hungry
+   · <30% → Dying
+3. 若新状态为 Dying，且是首次进入濒死，则进入 Restructuring（重组期）—— 注意：保护期结束后直接进入 Dying 是允许的，因为保护期只豁免倒闭检测，不豁免满足率下降。
+4. 触发 StateChanged 事件。
+
+修改 CompanyManager.OnDayStarted 中的保护期结束逻辑
+
+伪代码示例：
+
+```csharp
+if (IsInProtectionPeriod(companyId) && protectionEndsToday)
+{
+    EndProtectionPeriod(companyId);
+    var newStatus = DetermineCompanyStatusFromFuelSatisfaction(companyId);
+    if (newStatus != CompanyStatus.Protected)
+        SetStatus(companyId, newStatus);
+}
+```
+
+---
+
+补丁六：配置类结构建议（非强制，但推荐）
+
+为减少开发歧义，建议在 src/Config/ModConfig.cs 中按以下结构组织（与 V3.1 §10 完全对应）：
+
+```csharp
+public class ModConfig
+{
+    // === 10.1 固定公司 ===
+    public FixedCompanyConfig Pierre { get; set; }
+    public FixedCompanyConfig Joja { get; set; }
+
+    // === 10.2 动态公司 ===
+    public DynamicCompanyConfig Dynamic { get; set; }
+
+    // === 10.3 利率浮动 ===
+    public RateFloatConfig RateFloat { get; set; }
+
+    // === 10.4 公司状态与风险 ===
+    public RiskConfig Risk { get; set; }
+
+    // === 10.8 燃料机制 ===
+    public FuelConfig Fuel { get; set; }
+
+    // === 10.9 季节初果实购买 ===
+    public SeasonalPurchaseConfig SeasonalPurchase { get; set; }
+}
+```
+
+具体字段名与 V3.1 表格参数名保持一致，便于代码审查对照。
+
+---
+
+补丁七：每日结算流程更新（整合本补丁）
+
+在 V3.1 §五 每日结算流程中，插入以下步骤（不改变原有编号，使用字母后缀）：
+
+```diff
+1. 游戏适配器捕获时间、天气、运气
+2. FuelService 更新燃料需求与满足率 → 判定公司状态区间
+3. 对于保护期内的新公司，跳过倒闭条件检测
++ 3a. MessageScheduler 获取今日新闻，若有临时风险，调用 IBankruptcyHandler.SetTemporaryBankruptcyRiskOverride
+4. CompanyManager 检测倒闭条件 → 若倒闭，按状态阶梯返还存款【V3.3.2】
++ 4a. 倒闭检测完成后，清除临时风险覆盖（SetTemporaryBankruptcyRiskOverride(null)）
+5. CompanyManager 传入公司状态参数
+...
++ 10a. 保护期结束当天，重新计算状态并迁移（见补丁五）
+10b.【V3.3.1】濒死保护期结束检查：燃料≥30% → 脱离濒死，满足率重置为100%（稳定期），贷款上限恢复×1.0，入股注资翻倍计入存款
+11. 持久化所有变更数据
+12. 触发 UI 刷新事件
+12a.【V3.3】主机广播全量快照给客机（BankSnapshot 消息）
+12b.【V3.3】客机接收快照后刷新 UI（OnModMessageReceived）
+```
+
+---
+
+补丁版本：V3.2
+发布日期：2026-04-29
+架构 V3.2 正式补丁（完整版）
+
+基于：架构总3.0 V3.1 补完版
+发布日期：2026-04-29
+版本说明：本补丁基于审核确认的有效漏洞清单（#1, #2, #4）及后续深度讨论，对 V3.1 中存在的逻辑硬伤、体验风险和数值设计进行全面修复和优化。本补丁与 V3.1 冲突处，以本补丁为准；本补丁未覆盖处，以 V3.1 为准。
+
+---
+
+补丁一：燃料库存机制重构（第三次修正）
+
+对应漏洞：漏洞 #1
+风险等级：🔴 致命（Critical）
+
+【V3.8 修正】燃料判定方式 — 百分比满足率（替代 V3.2 绝对数量阶梯）
+
+  实际实现采用百分比满足率判定，与架构重构报告 V2.0 一致，替代原 V3.2 设计的 Y 值绝对数量阶梯。
+
+  满足率公式
+
+  ```
+  满足率 = FuelStock / (DBase × FPPerCrop)
+  其中 FPPerCrop = 10，FuelStock 为 FP 整数
+  ```
+
+  状态判定（百分比制）
+
+  ```
+  满足率 > 150%     → Prosperous（繁荣期）
+  满足率 80%-150%  → Stable（稳定期）
+  满足率 30%-80%   → Hungry（饥饿期）
+  满足率 < 30%     → Dying（濒死期）
+  ```
+
+  日消耗公式
+
+  ```
+  dailyConsumption = (int)(DBase × statusCoefficient × FPPerCrop)
+  其中 statusCoefficient: Prosperous×1.0, Stable/New×0.8, Hungry×0.5, Dying/Protection×0.3
+  ```
+
+  新公司初始燃料
+
+  ```
+  FuelStock = Smax × 0.3 × FPPerCrop
+  ```
+
+  燃料=0 且状态为 Dying → 公司立即倒闭（Bankrupt），存款清零。
+
+---
+
+补丁二：复利机制手动激活（第二次修正）
+
+对应漏洞：漏洞 #2
+风险等级：🔴 致命（Critical）
+
+2.1 状态机修正
+
+```
+[*] → Inactive（公司生成时默认）
+Inactive → Active（玩家手动激活，需不在冷却期内）
+Active → CoolingDown（14天复利到期）
+CoolingDown → Inactive（112天冷却期满）
+```
+
+公司倒闭后重生，冷却期延续；冷却期满进入 Inactive，等待玩家再次激活。
+
+2.2 CompanyStatus 枚举新增
+
+```csharp
+Inactive = 8  // 待激活状态（冷却期满后默认状态）
+```
+
+2.3 激活条件与防批量激活
+
+· 必须处于 Inactive 状态，且不在冷却期内，且公司未倒闭/重组。
+· 最小激活间隔：每次成功激活后，需等待至少 7 天（可配置）才能再次激活其他公司（防同一天全部激活）。
+· 此约束为全局的，即玩家不能在同 7 天内激活多家公司。
+
+2.4 ICompanyManager 新增接口
+
+```csharp
+/// <summary>
+/// 手动激活复利。成功返回 true，失败返回 false。
+/// </summary>
+bool ActivateCompoundInterest(CompanyId companyId);
+```
+
+---
+
+补丁三：公司生成优先级与失败反馈
+
+对应漏洞：漏洞 #4
+风险等级：🟡 中等（Medium）
+
+3.1 生成优先级规则
+
+当多个作物同时满足创始条件时，按以下顺序决定生成：
+
+1. 作物基础售价（高价优先）
+2. 累计出售量（多优先）
+3. 是否达到第二阈值（如 75 个）优先
+
+3.2 失败记录与反馈
+
+· 每日生成尝试失败的作物记录至 FailedGenerationAttempts 列表，包含失败原因（席位满、本季上限、冷却期等）。
+· 反馈渠道：
+  · 电视新闻：简要提及“XX作物达到上市条件但因市场原因暂未生成公司”。
+  · 手机 App：显示候补队列。
+  · 邮件：次日早晨发送通知（可选，配置项控制）。
+
+3.3 接口新增
+
+```csharp
+IReadOnlyList<CropGenerationAttempt> GetFailedGenerationAttempts();
+```
+
+3.4 每日流程更新
+
+在 OnDayStarted() 中：
+
+```
+1. 收集满足创始股本阈值的作物
+2. 按优先级排序
+3. 依次尝试生成，记录失败
+4. 失败列表供 UI/电视/邮件读取
+```
+
+---
+
+补丁四：濒死注资附带燃料
+
+关联优化
+风险等级：🟡 中等（Medium）
+
+4.1 规则
+
+当玩家向濒死公司注资时，根据注资金额附带基础燃料库存：
+
+注资金额 附带燃料
+≤ 10,000g 1 倍日需求（基础需求 D_{base}）
+10,001 ~ 50,000g 3 倍日需求
+50,000g 7 倍日需求
+
+4.2 实现要求
+
+· 附带燃料直接调用 IFuelService.AddFuelStock()。
+· 若库存从 0 变为 > 0，立即重新计算状态，可能脱离濒死。
+
+---
+
+补丁五：保护期库存枯竭预警
+
+关联优化
+风险等级：🟡 中等（Medium）
+
+5.1 预警规则
+
+· 保护期内公司，当库存 < 3 倍日需求时，在手机 App 中显示黄色警告。
+· 当库存 = 0 时，显示红色警告，并于次日发送邮件提醒。
+
+5.2 邮件模板
+
+```
+发件人：[公司名] 董事会
+主题：紧急 - 燃料库存枯竭预警
+正文：
+  库存已耗尽，保护期剩余 X 天，请尽快补充，否则保护期结束后将面临倒闭风险。
+```
+
+---
+
+补丁六：每日结算流程整合（V3.2 终版）
+
+```
+1.  游戏适配器捕获时间、天气、运气
+2a. FuelService：库存 += 昨日出货；若超上限则截断
+2b. FuelService：库存 -= 当日消耗 D
+2c. FuelService：基于剩余库存判定状态区间
+3.  对于保护期内公司，跳过倒闭检测
+3a. MessageScheduler 获取今日新闻，若有临时风险则设风险覆盖
+4.  CompanyManager 检测倒闭条件
+4a. 清除临时风险覆盖
+5.  CompanyManager 传入状态参数
+6.  InterestCalculator 计算日利率（应用状态乘数）
+7.  LoanService.DailyTick()
+8.  BankruptcyHandler.CheckBankruptcyStatus()
+9.  AccountService 计息前检查复利冷却/Inactive状态
+10. AccountService.CreditInterest()
+10a. 保护期结束当天，重新计算状态并迁移
+11. CompanyManager.OnDayStarted()：生成候选、优先级排序、尝试生成、记录失败
+11a. 手机/电视/邮件反馈生成失败信息
+12. 持久化数据
+13. UI 刷新
+```
+
+---
+
+【V3.8 修正】10.10 燃料参数（替代 V3.2 Y 值体系）
+
+  以下参数已被 V3.8 百分比满足率体系替代，仅保留作历史参考。
+
+  当前实际参数（以报告为准）：
+
+  参数 值 说明
+  满足率公式 FuelStock / (DBase × FPPerCrop) 百分比制
+  FPPerCrop 10 1 标准作物 = 10 FP
+  繁荣阈值 满足率 > 150% -
+  稳定阈值 满足率 80%-150% -
+  饥饿阈值 满足率 30%-80% -
+  濒死阈值 满足率 < 30% -
+  日消耗 DBase × statusCoefficient × FPPerCrop (int)
+  新公司初始燃料 Smax × 0.3 × FPPerCrop FP
+
+  状态系数：Prosperous×1.0, Stable/New×0.8, Hungry×0.5, Dying/Protection×0.3
+
+---
+
+代码审查清单更新（追加至 §12.2）
+
+  以下为 V3.8 当前审查项（替代 V3.2 绝对数量阶梯审查项）：
+
+  校验项 严重程度
+  满足率基于 FuelStock/(DBase×FPPerC) 百分比计算 🔴 致命
+  状态判定使用百分比阈值（>150%/80-150/30-80/<30） 🔴 致命
+  日消耗公式 DBase × statusCoefficient × FPPerCrop 正确实现 🔴 致命
+  燃料=0 + Dying → 立即倒闭，存款清零 🔴 致命
+  FPPerCrop=10 硬编码，内部 int 计算 🟡 高
+复利冷却期满进入 Inactive，不自动激活 🔴 致命
+复利仅由玩家手动激活，新公司默认 Inactive 🔴 致命
+公司生成严格按优先级排序 🟡 高
+生成失败有反馈（失败列表、电视/邮件/手机） 🟡 高
+注资附带燃料正确注入库存 🟡 中
+保护期库存预警在 UI 和邮件生效 🟡 中
+
+---
+
+文档版本记录
+
+项目 内容
+补丁版本 V3.2 正式版（整合全部修正）
+基于架构版本 V3.1 补完版
+修复漏洞 #1（燃料错位）、#2（复利自动激活）、#4（生成反馈）
+深度优化 库存阈值与日消耗锚定单土地月产能 Y
+发布日期 2026-04-29
+
+---
+
+架构 V3.3 增量补丁（GMCM 安全层 + 跨公司套利保护）
+
+版本说明：本补丁不推翻 V3.1/V3.2 任何设计，仅补充 GMCM 配置界面的反射安全层与跨公司套利保护机制，属于 UI 基础设施层。
+
+生效原则：本补丁专属于 BankMod 客户端实现，不影响服务端设计；与服务端设计冲突处以 V3.1/V3.2 为准。
+
+---
+
+补丁一：GMCM 反射崩溃防护（Harmony Prefix）
+
+1.1 问题根因
+
+GMCM 1.12.0 的 Mod.OnUpdateTicking（订阅 SMAPI UpdateTicking 事件）每帧对 Game1.activeClickableMenu 进行反射：
+
+  Helper.Reflection.GetField<bool>(activeClickableMenu, "titleInPosition", required: true)
+
+SMAPI 的 Reflector.GetField<T> 使用 required: true，当：
+  - activeClickableMenu 为 null → ArgumentNullException
+  - 菜单对象没有 titleInPosition 字段（如 DialogueBox）→ InvalidOperationException
+
+GMCM 的 ModConfigMenu..ctor() 在第 154 行同样对 SpecificModConfigMenu 进行此反射。
+
+1.2 解决方案：GmcmSafetyPatch（Harmony Prefix）
+
+在 GMCM 的两个入口点打 Harmony Prefix：
+  - Mod.OnUpdateTicking — 每帧保护
+  - ModConfigMenu..ctor() — 构造时保护
+
+Prefix 逻辑：
+  1. Game1.activeClickableMenu 为 null → return false（跳过 GMCM 原始处理）
+  2. 菜单对象无 titleInPosition 字段 → return false
+  3. 菜单有该字段 → return true（正常执行 GMCM 逻辑）
+
+1.3 实现文件
+
+文件：GmcmSafetyPatch.cs（独立于 BankMod.cs，职责单一）
+
+关键设计决策：
+  - 使用 AccessTools.TypeByName("GenericModConfigMenu.Mod") 优先加载，失败时 fallback 到 Assembly 遍历
+  - 仅 Patch 已存在的方法，方法不存在时记录日志静默跳过
+  - Prefix 方法本身零依赖（不引用 GMCM 类型），避免程序集加载失败
+  - 对 ModConfigMenu..ctor() 的 Patch 使用相同 Prefix（同一检查逻辑）
+
+1.4 接口约束
+
+  GmcmSafetyPatch.Apply(IMonitor monitor)
+    - 必须在 BankMod.Entry() 中最先调用（GMCM 注册之前）
+    - monitor 用于日志输出
+    - 失败静默：类型/方法未找到只记录 Warn 日志，不抛异常
+
+---
+
+补丁二：SafeDialogueBox（双保险）
+
+2.1 设计动机
+
+即使 Harmony Prefix 正确生效，也需要兜底保护。SafeDialogueBox 是 DialogueBox 的子类，添加了 titleInPosition 字段以满足 GMCM 反射。
+
+2.2 关键发现：titleInPosition 是 bool 不是 Point
+
+GMCM 的 Helper.Reflection.GetField<bool>(menu, "titleInPosition") 将其作为 bool 读取。titleInPosition 意为"标题是否在正确位置"，是 UI 状态标志，不是坐标。
+
+SafeDialogueBox 必须声明 public bool titleInPosition;（不是 Point）。
+
+2.3 接口
+
+  private sealed class SafeDialogueBox : StardewValley.Menus.DialogueBox
+  {
+      public bool titleInPosition;  // satisfies GMCM reflection
+      public SafeDialogueBox(string dialogue) : base(dialogue) { }
+  }
+
+---
+
+补丁三：四步延迟保存拒绝机制
+
+3.1 设计动机
+
+GMCM 的 Save 回调在菜单上下文中运行，以下 UI 通道被 GMCM 菜单层阻塞：
+  - HUDMessage / showRedMessage / chatBox.addErrorMessage → 被吞没
+  - 直接 Game1.activeClickableMenu = new DialogueBox(...) → 被 GMCM 覆盖
+  - Game1.exitActiveMenu() → 触发 emergencyShutDown()，破坏 UI mode stack
+
+结论：Save 回调中不能直接操作菜单。
+
+3.2 四步延迟序列
+
+  Step 0 (Save 回调):
+    HasIllegalConfig() → true
+    → _config 回退为磁盘版本（Helper.ReadConfig）
+    → _postSaveStep = 1
+    → return（不写盘）
+
+  Step 1 (下一帧 OnUpdateTicked):
+    _postSaveStep == 1
+    → Game1.activeClickableMenu = null（干净关闭，不调 exitActiveMenu）
+    → _postSaveStep = 2
+
+  Step 2 (再下一帧 OnUpdateTicked):
+    _postSaveStep == 2
+    → Game1.activeClickableMenu = new SafeDialogueBox(msg)
+    → _postSaveStep = 3
+
+  Step 3 (玩家关闭对话框 → OnMenuChanged):
+    e.OldMenu is SafeDialogueBox && e.NewMenu is null
+    → _postSaveStep = 4
+
+  Step 4 (下一帧 OnUpdateTicked):
+    _postSaveStep == 4
+    → _gmcmApi.OpenModMenu(ModManifest)  // 重新打开 GMCM
+    → _postSaveStep = 0（复位）
+
+3.3 关键约束
+
+  - 延迟步骤必须放在 OnUpdateTicked 的最顶端（Context.IsWorldReady 检查之前），因为 GMCM 打开时 Context.IsWorldReady 为 False
+  - 同理，OnMenuChanged 中 SafeDialogueBox 关闭检测也必须放在最顶端
+  - 使用 activeClickableMenu = null 而非 exitActiveMenu()，避免 UI mode stack 损坏
+  - GMCM 重新打开必须延迟一帧（从 OnMenuChanged 只设标志，在 OnUpdateTicked 真正调用 OpenModMenu），避免事件处理器内的重入
+
+---
+
+补丁四：跨公司套利保护规则
+
+4.1 校验范围
+
+仅 Joja + 皮埃尔两个固定公司（_config.Companies[0] 和 [1]）。
+
+4.2 校验公式
+
+所有贷款利率 >= 所有存款利率，即 4 个条件：
+
+  Joja.LoanRate >= Joja.DepositRate
+  Joja.LoanRate >= Pierre.DepositRate
+  Pierre.LoanRate >= Joja.DepositRate
+  Pierre.LoanRate >= Pierre.DepositRate
+
+4.3 触发时机
+
+  - 启动时（ValidateAndFixConfigOnStartup）：自动修正并写盘
+  - GMCM 滑块拖动时：实时显示一句话警告（通过 AddParagraph 的 Func<string> 每帧重算）
+  - GMCM 保存时：拒绝写盘 + 触发四步延迟序列
+
+4.4 setValue 不做钳制
+
+setValue 回调中不调用 Math.Min/Math.Max，让滑块完全自由拖动。理由：
+  - GMCM 不实时反馈钳制结果，玩家拖到边界时滑块视觉不动会认为是 Bug
+  - 在保存时检测并拒绝更符合玩家心智模型
+
+---
+
+补丁五：GMCM 安全层架构图
+
+  BankMod.Entry()
+    │
+    ├─ GmcmSafetyPatch.Apply(Monitor)  ← 最先执行
+    │   ├─ [Harmony Prefix] Mod.OnUpdateTicking → 每帧检查 titleInPosition
+    │   └─ [Harmony Prefix] ModConfigMenu..ctor → 构造时检查
+    │
+    ├─ RegisterModConfig(_gmcmApi)
+    │   ├─ setValue: 自由赋值，无钳制
+    │   ├─ AddParagraph: 实时显示非法警告（一句话）
+    │   └─ save: HasIllegalConfig() → 拒绝 + 四步延迟
+    │
+    └─ OnUpdateTicked / OnMenuChanged
+        └─ 四步延迟序列（关闭GMCM → 弹警告 → 检测关闭 → 重开GMCM）
+
+---
+
+跨模块依赖声明（V3.3 新增）
+
+  - GmcmSafetyPatch 依赖：HarmonyLib（SMAPI 内置 0Harmony.dll）、SMAPI IMonitor
+  - SafeDialogueBox 依赖：StardewValley.Menus.DialogueBox
+  - 四步延迟依赖：SMAPI UpdateTicked、MenuChanged 事件
+  - 跨公司校验依赖：仅 ModConfig.Companies 数据模型，无服务依赖
+
+与 V3.1/V3.2 的关系：
+  - 本补丁属于客户端 UI 安全层，与 V3.1/V3.2 的服务端设计正交
+  - GmcmSafetyPatch 的 Prefix 检查逻辑可复用于任何需要防 GMCM 反射崩溃的 Stardew mod
+  - SafeDialogueBox 模式（添加反射所需字段）可复用于任何被 GMCM 反射检查的菜单类
+
+---
+
+文档版本记录（V3.3）
+
+项目 内容
+补丁版本 V3.3（GMCM 安全层 + 跨公司套利保护）
+基于架构版本 V3.2 正式版（整合全部修正）
+新增 GmcmSafetyPatch（Harmony Prefix）、SafeDialogueBox、四步延迟机制、跨公司校验规则
+发布日期 2026-04-29
+
+---
+
+架构 V3.4 增量补丁（阶段五：贷款基础功能实现）
+
+版本说明：本补丁实现 demand.txt §5.1-5.5 全部贷款基础功能，不推翻 V3.1~V3.3 任何设计。
+
+生效原则：本补丁为 BankMod 客户端实现，LoanService 替换桩为完整实现。
+
+---
+
+补丁一：LoanRecord 数据模型
+
+新增文件内类型：Data/BankAccountData.cs → LoanRecord
+
+字段：
+  CompanyName          string    所属公司名
+  Principal            int       剩余本金
+  AccumulatedInterest  int       累计未还利息
+  InterestRate         double    借款时锁定的有效日利率（含14天折扣）
+  RepaymentPeriodDays  int       还款周期（7 或 14）
+  DueDay               int       到期日（Game1.stats.DaysPlayed 绝对值）
+  LoanStartDay         int       借款日
+  IsInDefault          bool      是否处于逾期/宽限状态
+  DefaultDaysRemaining int       宽限期剩余天数
+
+BankAccountData.Loans : List<LoanRecord> — 支持多公司同时持有贷款。
+旧存档自动迁移：BankAccountData.LoanPrincipal / AccumulatedInterest → 首个 LoanRecord。
+
+---
+
+补丁二：ILoanService 完整接口
+
+文件：Services/Abstractions/ILoanService.cs
+
+方法：
+  GetLoans(account) → IReadOnlyList<LoanRecord>
+  GetLoan(account, companyName) → LoanRecord?
+  IssueLoan(company, amount, repaymentDays, account, config, interestCalc) → bool
+  RepayLoan(loan, requestedAmount, account) → int   // 返回实际还款额
+  DailyTick(account, config, interestCalc)           // 每日结算
+
+---
+
+补丁三：LoanService 完整实现（替换桩）
+
+文件：Services/Core/LoanService.cs
+
+IssueLoan 校验链：
+  1. 金额 > 0 且周期为 7 或 14
+  2. 已有本金 + 新借 ≤ company.LoanLimit（公司级上限）
+  3. 全部借款 ≤ min(净资产 × BorrowingLeverageCoefficient, BorrowingHardCap)（全局杠杆上限）
+  4. 14天周期应用 LongTermRateDiscount 利率折扣
+  5. 已有贷款时加贷合并，利率按加权平均
+
+RepayLoan 资金源：现金 → 同公司存款（不动其他公司，保留玩家决策权）
+
+DailyTick 三步结算：
+  Step 1 — 每日计息：利息 = 本金 × 有效日利率（含天气/运气影响），逾期加罚息 PenaltyInterestRate
+  Step 2 — 到期检查：仅扣现金，不够 → 进入宽限期（DefaultDaysRemaining = PrincipalDebtGraceDays）
+  Step 3 — 宽限递减：次日开始倒计时，归零后强制扣款（现金 → 同公司存款 → 其他公司存款）
+
+三级还款资金源矩阵：
+  到期自动扣款    现金 ✓  同公司存款 ✗  其他存款 ✗
+  手动还款        现金 ✓  同公司存款 ✓  其他存款 ✗
+  宽限期强制扣款  现金 ✓  同公司存款 ✓  其他存款 ✓
+
+---
+
+补丁四：CalculateLoanRate 天气/运气联动
+
+文件：Services/Core/Interest/FixedCompanyInterestStrategy.cs
+
+贷款利率不再返回静态 config 值，复用阶段四逻辑：
+  effectiveRate = baseRate + weatherBonus → × (1 + luck × luckCoeff)
+  受 AllowNegativeInterest / DepositRateFloor 约束
+
+---
+
+补丁五：BankMenu 贷款 UI
+
+文件：UI/BankMenu.cs
+
+窗口扩展至 680px 高，新增：
+  - 贷款信息区：本金、累计利息、日利率、还款周期、距到期日、应还总额
+  - 借7天 / 借14天 按钮 → NumberInputMenu → ProcessBorrow
+  - 还款 按钮 → 显示应还总额 → NumberInputMenu → ProcessRepay
+  - 借款失败时计算 min(公司剩余额度, 全局剩余额度) 并提示"当前最多可借 X g"
+
+---
+
+跨模块依赖声明（V3.4 新增）
+
+  - LoanService 依赖：BankAccountData、ModConfig、IInterestCalculator、Game1.player
+  - 每日结算接入：CompanyManager.OnDayStarted() → SettleDailyLoans() → LoanService.DailyTick()
+  - GMCM 配置：LoanLimit、LongTermRateDiscount、PrincipalDebtGraceDays、PenaltyInterestRate
+  - 全局杠杆：BorrowingLeverageCoefficient、BorrowingHardCap（阶段十二完整实现待 ICreditLimitService）
+
+与已有架构的关系：
+  - 阶段五属于客户端贷款基础功能，与阶段八（破产保护 IBankruptcyHandler）正交
+  - LoanRecord 为阶段八的 IBankruptcyHandler.CheckBankruptcyStatus 提供数据基础
+  - 全局杠杆计算当前直接使用 config 值，阶段十二由 ICreditLimitService 统一接管
+
+---
+
+文档版本记录（V3.4）
+
+项目 内容
+补丁版本 V3.4（阶段五：贷款基础功能完整实现）
+基于架构版本 V3.3（GMCM 安全层）
+新增 LoanRecord 数据模型、ILoanService 完整接口、LoanService 完整实现、BankMenu 贷款 UI
+发布日期 2026-04-30
+
+---
+
+架构 V3.3 增量补丁（联机模式 + 燃料 FP 整数化）
+
+版本说明：本补丁在 V3.2/V3.4 基础上新增联机多人模式架构与燃料值内部整数化规则，属于跨模块横切关注点。
+
+生效原则：联机改造从阶段一即需埋点，燃料改造只影响阶段六之后。
+
+---
+
+补丁一：联机模式主机权威机制（§1.1-1.5）
+
+1.1 核心原则：主机权威（Host Authority）
+
+· 所有金融操作（存取款、借款、还款、日结算）只在主机端执行。
+· 客机端的操作必须通过消息协议发送给主机，由主机鉴权并执行后广播结果。
+· 客机端不直接修改任何金融数据。
+
+1.2 主/客机判断
+
+使用 SMAPI 内置 API：Context.IsMainPlayer
+· 主机（Host）：true — 执行全部金融逻辑
+· 客机（Client）：false — 仅执行 UI 交互，金融操作通过消息转发
+
+1.3 事件注册
+
+在 ModEntry.cs 的 Entry() 方法中注册：
+· helper.Events.Multiplayer.PeerConnected += OnPeerConnected;
+· helper.Events.Multiplayer.ModMessageReceived += OnModMessageReceived;
+
+1.4 消息类型定义
+
+消息类型常量字符串：
+· "ConfigSync" — 主机向客机同步 ModConfig
+· "BankOperation" — 客机向主机发送金融操作请求
+· "BankDataSync" — 主机向全体客机广播银行数据更新
+· "BankSnapshot" — 主机日结算后向全体客机广播完整快照
+
+消息类标记 [Serializable]，包含：
+· BankOperationRequest：操作类型（存款/取款/借款/还款）、公司名、金额、发起玩家ID
+· BankDataSync：所有公司利率、状态、目标玩家自己的余额（不泄露他人隐私）
+
+1.5 客机 OnDayStarted 跳过
+
+· 客机端 OnDayStarted 中，若 !Context.IsMainPlayer，立即 return。
+· 客机不执行任何日结算逻辑（利息计算、贷款扣息、公司倒闭检测等）。
+· 客机的 UI 刷新通过接收主机 BankSnapshot 消息驱动。
+
+---
+
+补丁二：联机数据一致性保障机制（§2.1-2.4）
+
+2.1 操作锁机制
+
+· 主机端维护 Dictionary<long, bool>（玩家ID → 操作进行中）防止同一玩家并发操作。
+· 操作开始前加锁，操作完成/超时后解锁。
+· 客机操作超时时间：5 秒（可配置）。
+
+2.2 数据同步时机
+
+· 每次金融操作完成后立即广播 BankDataSync 给全体客机。
+· 每日结算完成后广播 BankSnapshot（全量快照）。
+· 客机加入时（PeerConnected），主机发送 ConfigSync + BankDataSync。
+
+2.3 客机功能白名单
+
+允许（需消息转发）：
+· 存款、取款、借款、还款（通过 BankOperation 消息）
+· 查看 UI（本地读取数据，不修改）
+
+禁止：
+· 直接修改任何金融数据
+· 执行日结算
+· 修改 GMCM 配置（仅主机可修改）
+
+2.4 分家/合家存款模式（勘误六）
+
+· 未分家（useSeparateWallets == false）：共同账户，所有玩家看到同一余额。
+· 分家当天：执行 SplitBankAccountsAmongPlayers()，存款/贷款/利息按人数均分。
+· 分家后（useSeparateWallets == true）：独立账户，按 playerId 隔离。
+· 贷款跟随存款一起平分，还款周期/下次还款日保持不变。
+· 分家当天金融操作按钮灰掉，直到日结算完成。
+
+---
+
+补丁三：燃料值内部整数化与非对称套利规则（§3.1-3.7）
+
+3.1 燃料点（FP）定义
+
+燃料库存内部以"燃料点（Fuel Point, FP）"为单位计算。
+1 个标准作物 = 10 FP。
+
+3.2 内部单位 vs UI 展示
+
+· 内部所有库存使用 int（FP）。
+· UI 展示层：FP ÷ 10 后显示为 1 位小数（个当量）。
+· 阈值公式中的 Y 也转换为 FP（Y × 10）。
+
+3.3 燃料变动规则（非对称）
+
+操作 燃料变动（FP） 说明
+出货箱卖出 1 个对应作物 +10 FP 标准回补
+出货箱卖出 1 个铱星作物 +20 FP 高品质加成（额外 +10）
+出货箱卖出 1 个金星作物 +15 FP 中品质加成（额外 +5）
+在皮埃尔/Joja 购买 1 个对应作物 -5 FP 打压（为对家提供渠道）
+在皮埃尔/Joja 卖出 1 个对应作物 -5 FP 与购买打压等值
+
+3.4 套利机制
+
+买 10 个土豆（-50 FP）→ 卖 5 个出货（+50 FP）→ 净库存不变，手持 5 个可应对未来危机。
+打压扣除量（50%）小于回补量，创造囤货空间。
+
+3.5 IFuelService 新增方法
+
+· RecordShippingBinSale(companyId, quantity, quality) — 出货箱卖出 +FP
+· RecordExternalPurchase(companyId, quantity) — 商店购买 -FP
+· RecordExternalSale(companyId, quantity) — 商店卖出 -FP
+· GetDisplayFuelStock(companyId) — UI 展示用（FP ÷ 10）
+
+3.6 FuelConstants 静态类
+
+FuelPointsPerCrop = 10
+ShippingBinBaseBonus = 10
+IridiumExtraBonus = 10
+GoldExtraBonus = 5
+ExternalPurchasePenalty = 5
+ExternalSalePenalty = 5
+
+3.7 新公司初始库存
+
+· initialFuelPoints = Smax × 0.3（内部单位 FP）
+· Smax = Y × 10 × 10 = Y × 100（转换为 FP）
+
+---
+
+配置参数更新（追加至 §10）
+
+10.11 多人模式参数（V3.3）
+
+参数 推荐值 说明
+客机操作超时（秒） 5 客机等待主机确认的最长时间
+
+10.12 燃料数值参数（V3.3）
+
+参数 推荐值 说明
+燃料点倍数 10 1 个标准作物 = 10 FP
+出货箱基础加成 10 FP/个
+铱星额外加成 10 FP/个 总计 20 FP
+金星额外加成 5 FP/个 总计 15 FP
+购买对家打压值 5 FP/个 不设配置，固定为出货加成的一半
+商店卖出打压值 5 FP/个 与购买打压等值
+
+---
+
+代码审查清单更新（追加至 §12.2）
+
+校验项 严重程度
+客机 OnDayStarted 立即 return（!Context.IsMainPlayer） 致命
+所有金融操作仅在主机端执行 致命
+BankOperation 消息包含完整鉴权信息 致命
+操作锁正确加锁/解锁 高
+BankSnapshot 不泄露其他玩家隐私数据 高
+燃料库存内部使用 int（FP），UI 层 ÷10 致命
+出货/购买燃料变动遵循非对称规则（+10/-5） 致命
+新公司初始库存 = Smax × 0.3（FP 单位） 中
+
+---
+
+项目结构更新（修正 §7）
+
+在 Services.Core/ 中新增：
+├── AssetPoolService.cs                    // 【V3.3.1 新增】资产池计算与取款限制
+
+在项目根目录新增：
+Messages/
+├── BankOperationRequest.cs                // 【V3.3 新增】客机金融操作请求
+└── BankDataSync.cs                        // 【V3.3 新增】主机数据同步广播
+
+---
+
+架构 V3.3.1 增量补丁（公司状态操作限制重构）
+
+补丁版本：V3.3.1
+补丁类型：规则修正 + 机制新增
+影响范围：value2.docx §3、§5、§7 / 架构总 §三 / index §阶段九 / demand.txt §9.5
+依赖：V3.3（联机/燃料补丁）
+
+一、核心修正摘要
+
+旧规则：饥饿期取款冻结，濒死期取款冻结，注资救市允许无额度限制。
+新规则：取款改为限制取款（≤ 公司资产池余额），饥饿期禁止注资，濒死期入股救市翻倍回报。
+
+二、资产池机制
+
+定义：
+· 有效贷款上限 = 原始贷款上限 × 状态乘数
+· 资产池 = 有效贷款上限 − 已贷出未归还本金总额
+· 玩家最大取款额 = min(该玩家存款余额, max(0, 公司当前资产池余额))
+
+状态乘数：
+· 繁荣期/稳定期：贷款上限乘数 ×1.0（基准不变）
+· 饥饿期：贷款上限乘数 ×0.6
+· 濒死期：贷款上限乘数 ×0.3
+
+三、入股救市规则
+
+· 可用阶段：仅濒死期（7天重组期）
+· 注资上限：公司原始贷款上限 × 50%（不受状态乘数影响）
+· 回报方式：公司复活后，注资金额翻倍计入该玩家的存款本金
+· 回报生效条件：公司燃料满足率在7天内回升至 ≥ 30%
+· 失败处理：公司倒闭，注资金额与存款一并清零
+· 利率即分红：翻倍后的存款本金享受公司利率
+
+四、复活后稳定性
+
+· 公司脱离濒死后，燃料满足率重置为 100%（稳定期中部）
+· 公司状态为稳定期
+· 有效贷款上限恢复为原始贷款上限 × 1.0
+· 资产池同步恢复
+
+五、新操作限制规则表
+
+状态 存款 取款 借贷 注资救市 救活条件
+繁荣期 正常 正常 正常 - -
+稳定期 正常 正常 正常 - -
+饥饿期 正常 限制取款（≤ 资产池） 禁止 不允许 燃料满足率 ≥ 80%
+濒死期 正常 限制取款（≤ 资产池） 禁止 允许（上限=原始贷款上限×50%，复活后翻倍） 燃料满足率 ≥ 30%（7天窗口）
+复活后 正常 正常 正常 - 满足率重置为100%（稳定期中部）
+
+六、资产池变动来源
+
+操作 资产池变化
+玩家存款 不变
+玩家取款 不变
+玩家借款 减少（已贷出本金增加）
+玩家还贷 增加（已贷出本金减少）
+公司状态变化 随有效贷款上限联动
+注资救市 +金额（直接注入现金）
+每日付息 不变
+
+七、防套利闭环
+
+饥饿期不允许注资。玩家无法在饥饿期注资→让公司复活→立即取回注资（取款仍受限，但避免了注资套利路径）。
+
+八、新增配置参数
+
+参数 默认值 允许范围
+饥饿期贷款上限乘数 0.6 0.3 ~ 0.8
+濒死期贷款上限乘数 0.3 0.1 ~ 0.5
+
+九、代码审查致命级追加
+
+校验项 严重程度
+有效贷款上限 = 原始贷款上限 × 状态乘数 致命
+资产池 = 有效贷款上限 − 已贷出未归还本金 致命
+取款金额不超过资产池余额（饥饿/濒死期） 致命
+入股救市仅濒死期可用，饥饿期禁止 致命
+入股救市上限 = 原始贷款上限 × 50%（非有效贷款上限） 高
+复活后燃料满足率强制设为100%，贷款上限恢复×1.0 高
+入股存款翻倍后计入资产池 高
+公司倒闭时 PendingRescueDeposit 清零 中
+状态变化时资产池联动更新 中
+
+---
+
+架构 V3.3.2 增量补丁（公司倒闭存款返还机制）
+
+补丁版本：V3.3.2
+补丁类型：机制新增 + 配置扩展
+依赖：V3.3.1（公司状态操作限制重构）
+
+一、核心规则
+
+公司倒闭时，根据倒闭时公司所处的状态，按比例返还存款本金。
+返还仅针对存款本金，不包括已计入的利息（利息在倒闭时归零）。
+
+返还比例阶梯：
+
+倒闭时状态 返还比例 设计逻辑
+繁荣期 80% 产能过剩倒闭，玩家是超额供给的功臣
+稳定期 50% 随机概率倒闭，玩家正常经营
+饥饿期 0% 供给不足致死，有充足预警且可取款割肉
+濒死期 0% 7天窗口+入股救市均未能挽回
+
+二、不可逆阶梯校验
+
+核心原则：繁荣期返还比例 ≥ 稳定期返还比例 ≥ 饥饿期返还比例（0%）
+
+· 稳定期返还比例 = min(稳定期返还比例, 繁荣期返还比例)
+· 饥饿期和濒死期固定为 0%，不接受任何配置
+
+三、配置参数追加至 §10
+
+参数 默认值 允许范围 说明
+繁荣期倒闭返还比例 80% 0% ~ 100% 产能过剩死亡返还
+稳定期倒闭返还比例 50% 0% ~ 100% 随机概率死亡返还
+饥饿期倒闭返还比例 0% 固定0% 供给不足致死，不可调
+濒死期倒闭返还比例 0% 固定0% 重组失败，不可调
+
+GMCM 配置：
+· 仅暴露"繁荣期倒闭返还比例"和"稳定期倒闭返还比例"两个滑块
+· 饥饿期和濒死期不显示配置项（固定0%）
+· 滑块说明文字："稳定期返还比例不可超过繁荣期"
+
+四、代码审查致命级追加
+
+校验项 严重程度
+返还比例阶梯校验强制生效（稳定期不可超过繁荣期） 致命
+饥饿期和濒死期返还比例强制为0%，忽略任何配置覆盖 致命
+返还计算仅针对存款本金，不含已计利息 高
+入股翻倍存款参与返还计算 高
+GMCM界面实时校验：繁荣期滑块拖动时联动稳定期 中
+配置文件直接修改绕过GMCM时，启动时仍需执行阶梯校验 致命
+
+---
+
+勘误六：联机财产分配与存款分割机制
+
+问题来源：
+原版星露谷在刘易斯家中的"财产分配"功能，会将联机存档中的共同现金按玩家数量分割为个人独立现金。如果银行存款不跟随分割，会出现问题：
+1. 不分家时，存款按 ID 独立会让金融信息不透明。
+2. 分家后，如果银行存款继续保持"共同状态"，会导致资金归属混乱。
+
+修正方案：
+
+1. 不分家时的存款模式：共同账户
+· useSeparateWallets == false 时，所有玩家的银行存款是共同账户。
+· 任何玩家的存入/取款操作都直接影响共同账户。
+· UI 上显示"家庭存款"或"农场存款"。
+
+2. 分家时：存款按人数均分
+· 共同账户中的各项余额（存款本金、贷款本金、累计利息等）按在线玩家数量均分。
+· 写入各自的 modData 独立账户。
+
+3. 分家后：存款独立账户
+· useSeparateWallets == true 时，每个玩家的银行存款完全独立。
+· UI 只显示本玩家的存款数据。
+
+4. 核心实现接口
+
+SplitBankAccountsAmongPlayers() 方法逻辑：
+· 获取在线玩家数量
+· 对每个公司的共同存款/贷款/利息执行均分
+· 余数归主机（保证总金额守恒）
+· 继承原贷款合同条款（还款日、还款周期、日利率）
+· 分家当天金融操作按钮灰掉，直到日结算完成
+
+5. 贷款跟随存款平分
+· 贷款必须与存款一起平分，没有自由选择模式。
+· 拆分后的贷款，每人的还款周期、下次还款日保持不变。
+· 拆分后，每人独立负责自己的那份贷款。
+
+6. 反作弊说明
+· 分家前，任何玩家操作共同账户都是合法的。
+· 分家执行的代码在主机端运行，客机无权干预。
+· 分家结果通过 BankDataSync 广播给客机。
+
+7. 新增约束
+· 共同账户模式：useSeparateWallets == false 时共享
+· 分家均分：状态变化当日执行等额均分
+· 余数归主机：保证总金额守恒
+· 分家后独立：modData 独立存储
+· 操作锁：分家当天金融操作暂停
+
+---
+
+文档版本记录（V3.3 / V3.3.1 / V3.3.2）
+
+项目 内容
+补丁版本 V3.3（联机模式 + 燃料 FP 整数化）+ V3.3.1（状态操作限制重构）+ V3.3.2（倒闭存款返还）
+基于架构版本 V3.4（贷款基础功能完整实现）
+新增 联机架构、消息协议、燃料 FP 整数化、资产池机制、入股救市、倒闭返还阶梯、联机财产分配勘误
+发布日期 2026-05-02
+
+---
+
+架构 V3.5 增量补丁（作物利率与燃料数据索引·终版）
+
+版本说明：本补丁基于 V3.4 及 V3.3 系列补丁，彻底修正了所有作物的 R 值计算逻辑，统一采用"连续经营稳态模型"计算等效日收益，并同步更新燃料参数 Y。
+生效原则：本补丁中的作物利率和燃料数据取代此前所有版本中的示例利率表，是阶段六动态公司生成的唯一数据源。
+
+---
+
+补丁一：咖啡豆排除
+
+`Coffee Bean`（咖啡豆）因自我繁殖特性导致等效支出极低、R 值异常（>300%），严重破坏经济平衡，不参与动态公司系统。代码中应在公司生成候选列表里主动过滤。
+
+---
+
+补丁二：利率折扣规则（最终版，V3.5 patch5 修正）
+
+原线性衰减公式在 10%–20% 区间内导数非正，导致高 R 作物存款利率反而低于低 R 作物。现彻底简化：
+
+| R 区间 | 存款利率 | 贷款利率 |
+|---|---|---|
+| **R > 20%** | **R × 0.5** | R × 0.75 |
+| **0% < R ≤ 20%** | **R（不打折）** | **R × 1.5** |
+| **R ≤ 0%** | **0%（钳位）** | **0%** |
+
+附加约束：
+- 贷款利率硬下限 **+1%**（即使 R≤0% 时钳位为 0，实现中确保不低于 1%）。
+- 固定公司（皮埃尔、Joja）不适用上述折扣规则，其利率始终从 config 读取（单利锁定）。
+- 实现位置：`IInterestCalculator` 的 `CalculateDepositRate` / `CalculateLoanRate` 方法，在利率钳位阶段执行。
+
+---
+
+补丁三：计算方法（统一标准）
+
+等效支出：
+· 有商店种子的作物：等效支出 = 种子购买价
+· 无商店种子的作物（`*`标记）：等效支出 = 作物售价 ÷ 种子制造机平均出种率（≈2）
+
+等效日收益（连续经营稳态模型）：
+· 单次收获作物：等效日收益 =（售价 − 等效支出）÷ 生长天数
+· 连续收获作物：等效日收益 =（单次收获售价 − 等效支出÷全周期收获次数）÷ 再收天数
+  全周期取作物在室外可跨越的总天数（单季28天，跨两季56天，跨三季84天）
+
+基础日利率 R：R = 等效日收益 ÷ 等效支出
+
+燃料参数（与 V3.2 一致）：
+· Y = 单土地月产能（个/月/株）
+· D_base = (5/3) × Y（基础日消耗，个/天）
+· Smax = Y × 10（仓库上限）
+
+---
+
+补丁四：作物利率与燃料数据总表
+
+动态公司生成时使用的全部作物利率和燃料参数，以 `Crops values.txt` 为唯一数据源，取代此前各版本文档中的示例利率表。
+
+数据源位置：`Crops values.txt`
+
+实现位置：
+· `Services/Core/Interest/DynamicCompanyInterestStrategy.cs` — 利率折扣规则应用
+· `Services/Core/FuelService.cs` — 燃料参数 Y/D_base/Smax 读取
+· `Services/Core/CompanyManager.cs` — 生成候选收集 + 咖啡豆过滤
+
+关键数据修正：
+· 上古水果 R 从错误值 10.78% 修正为 19.70%（等效支出=282g，84天9收）
+· 咖啡豆完全排除（R>300%，自我繁殖破坏经济）
+· 折扣规则移除线性衰减：0%<R≤20% 区间存款利率不再打折（此前线性衰减因导数非正导致非单调性缺陷）
+· 土豆 R 修正为 15.33%（游戏平均多产系数 1.2×）
+· 蓝莓/啤酒花/西兰花/葡萄 R 值全面复核修正
+· 所有连续收获作物统一使用连续经营稳态模型
+
+---
+
+补丁五：贷款利率下限硬锁定
+
+无论存款利率如何，所有公司的贷款利率在实现中不得低于 **+1%**（即使理论计算结果为 0%）。此规则在 `IInterestCalculator` 实现中强制应用。
+
+---
+
+补丁六：非对称套利规则（确认保留 V3.3）
+
+本补丁不修改 V3.3 中确立的以下规则：
+· 套利是核心玩法：玩家在不同公司间借低息存高息是合法策略
+· 贷款利率下限 +1% 硬锁定
+· 存款利率可为负（当配置允许时），但贷款利率保持 ≥ +1%
+· 咖啡豆不生成公司
+
+---
+
+代码审查清单更新（V3.5 patch5 追加）
+
+| 校验项 | 严重程度 |
+|---|---|
+| 咖啡豆不生成动态公司 | 致命 |
+| 贷款利率下限 +1% 强制执行 | 高 |
+| 所有作物利率按 Crops values.txt 初始化 | 致命 |
+| 连续收获作物按稳态分摊模型计算等效日收益 | 高 |
+| 多产作物（土豆）按游戏平均多产系数计算 | 高 |
+| 折扣规则采用新三段式（R>20%×0.5, R≤20%不打折, 贷款×1.5） | 致命 |
+
+---
+
+文档版本记录（V3.5 patch5）
+
+项目 内容
+补丁版本 V3.5 全面修正（终版 / patch5 修正）
+基于架构版本 V3.4 + V3.3 系列补丁
+修正内容 全作物复核、折扣规则重构（移除线性衰减）、贷款利率下限硬锁定 +1%、数据统一
+发布日期 2026-05-03
+
+---
+
+架构 V3.6 增量补丁（阶段六实际实现：动态公司诞生与基础运营）
+
+版本说明：本补丁记录阶段六（Stage 6）实际代码实现情况，包含所有接口签名、方法参数、实际日常结算流程、关键 Bug 修复和实现教训。本补丁中的接口签名和流程以实际代码为准，覆盖 V3.1~V3.5 中不一致的抽象描述。
+
+生效原则：本补丁为代码实现层记录，与 V3.5 设计冲突处以本补丁（实际代码）为准。
+
+---
+
+补丁一：实际接口定义（代码级精确签名）
+
+1.1 ICompanyManager（实际 5 方法）
+
+文件：Services/Abstractions/ICompanyManager.cs（24 行）
+
+```csharp
+public interface ICompanyManager
+{
+    void OnDayStarted();
+    CompanyStatus GetStatus(CompanyId companyId);
+    IReadOnlyList<CompanyId> GetActiveCompanies();
+    List<CompanyDefinition> GetAllCompanyDefinitions(BankAccountData account);
+    int GetMaxWithdrawal(BankAccountData account, CompanyDefinition company);
+}
+```
+
+与 V3.1 设计的差异：
+- 无 GetCompany / AddSupply / InjectCapital / BeginSeasonTransition / FinalizeSeasonTransition / GetTransitionStatus / IsInProtectionPeriod / GetProtectionPeriodRemainingDays / IsFoundingCapitalMet / GetFoundingCapitalProgress / IsCompoundInterestCoolingDown / StartCompoundInterestCooldown / TrySpawnCompanyForCrop / CanSpawnNewCompanyInCurrentSeason / GetCurrentSeasonSpawnedCompanyCount / ActivateCompoundInterest
+- 新增 GetAllCompanyDefinitions(BankAccountData) — 合并固定公司 + 活跃动态公司为统一列表
+- 新增 GetMaxWithdrawal(BankAccountData, CompanyDefinition) — V3.3.1 资产池取款限制
+- OnDayStarted 无参数 — 内部自行 Load/Save 账户
+- 无事件定义（StateChanged 等事件在 YAGNI 原则下未实现）
+
+1.2 IFuelService（实际 6 方法）
+
+文件：Services/Abstractions/IFuelService.cs（27 行）
+
+```csharp
+public interface IFuelService
+{
+    void UpdateDailyInventory(BankAccountData account);
+    double GetSatisfactionRate(CompanyId companyId);
+    void RecordShippingBinSale(BankAccountData account, string cropCode, int quantity, int quality);
+    void RecordExternalPurchase(string cropCode, int quantity);
+    void RecordExternalSale(string cropCode, int quantity);
+    double GetDisplayFuelStock(CompanyId companyId);
+}
+```
+
+与 V3.1/V3.3 设计的重大差异：
+- 无 CalculateDailyFuelRequirement / RecordDailyFuelSupply / CalculateSatisfactionRate / DetermineCompanyStatus / GetBaseMaintenanceCoefficient / GetStatusCoefficient / GetCurrentFuelStock / AddFuelStock / GetMaxFuelStock / GetProsperityThreshold
+- UpdateDailyInventory 接收 BankAccountData 参数（关键反 bug 设计，见补丁八）
+- RecordShippingBinSale 接收 BankAccountData + string cropCode（非 CompanyId）+ int quantity + int quality（非 CropQuality 枚举）
+- RecordExternalPurchase/RecordExternalSale 使用 string cropCode（非 CompanyId）
+- 无 FuelConstants 静态类 — 常量直接定义在 FuelService 内部
+- 无 FuelCoefficients / StatusCoefficients 静态类 — 状态系数硬编码在 FuelService 中
+
+1.3 IInterestCalculator（实际 2 方法）
+
+文件：Services/Abstractions/IInterestCalculator.cs（14 行）
+
+```csharp
+public interface IInterestCalculator
+{
+    double CalculateDepositRate(CompanyDefinition company, InterestCalculationContext ctx);
+    double CalculateLoanRate(CompanyDefinition company, InterestCalculationContext ctx);
+}
+```
+
+与 V3.1 设计的差异：
+- 签名使用 CompanyDefinition + InterestCalculationContext（非 CompanyId + CompanyStatus + MarketContext）
+- 无 ComputeDailyInterest / UpdateCompoundInterestCooldown / IsInCompoundInterestCooldown
+- 无 CompanyStatus status 参数 — 状态乘数未在利率层实现（由 UI 层资产池机制代替）
+- 两个实现：FixedCompanyInterestStrategy + DynamicCompanyInterestStrategy
+
+1.4 ShipmentTrackingService（V3.1 设计未建模，Stage 6 新增）
+
+文件：Services/Core/ShipmentTrackingService.cs（129 行）
+
+```csharp
+public class ShipmentTrackingService
+{
+    public void ProcessShipments(BankAccountData account, IFuelService fuelService, IMonitor monitor);
+    public void UpdateConsecutiveDays(BankAccountData account);
+    // 内部：35 条目 ItemIdToCode 字典（QualifiedItemId → CropCode）
+}
+```
+
+设计说明：
+- 无接口（直接使用具体类），通过 ModServices 手动 DI 注入
+- ItemIdToCode 映射 35 种 QualifiedItemId（如 "(O)192" → "Potato"）到 CropDataProvider 的作物代码
+- ProcessShipments 在 DayEnding 事件中调用（非 DayStarted），因为出货箱在夜间结算
+- 同时调用 IFuelService.RecordShippingBinSale 进行燃料追踪
+
+1.5 实际 CompanyStatus 枚举（8 个成员）
+
+文件：Domain/CompanyStatus.cs（29 行）
+
+```csharp
+public enum CompanyStatus
+{
+    Prosperous,       // >150% 满足率
+    Stable,           // 80%-150%
+    Hungry,           // 30%-80%
+    Dying,            // <30%
+    Protection,       // 濒死保护期（7天重组）
+    Bankrupt,         // 已倒闭
+    New,              // 新公司保护期（3天）
+    CompoundCooldown  // 复利冷却期（112天）
+}
+```
+
+与 V3.1 枚举的差异：
+- 无 Restructuring（被 Protection 替代）
+- 无 Protected（被 New 替代，保护期 14→3 天）
+- 无 Inactive / Retired
+- 新增 CompoundCooldown（预留，当前未使用）
+
+---
+
+补丁二：实际每日结算流程（CompanyManager.OnDayStarted 8 步）
+
+文件：Services/Core/CompanyManager.cs（349 行）
+
+```
+1. _accountService.Load()                             — 加载玩家银行账户
+2. _shipmentTracking.UpdateConsecutiveDays(account)   — 更新连续售卖天数
+3. ResetSeasonalSpawnCounter(account)                 — 换季时重置每季生成计数
+4. CheckAndGenerateNewCompanies(account)              — 检查并生成新动态公司
+   ├─ 检查总席位上限（4个）和单季上限（2个）
+   ├─ 累计出售量 >= CompanySpawnRequiredSellCount（默认50）
+   ├─ 同作物公司已存在 → 跳过
+   ├─ CropDataProvider.IsExcluded（咖啡豆等）→ 跳过
+   ├─ IsCropOnBankruptcyCooldown → 跳过
+   └─ GenerateDynamicCompany: 初始燃料 = Smax × 0.3 × 10 FP
+5. _fuelService.UpdateDailyInventory(account)         — 扣减每日燃料消耗
+   UpdateCompanyStatuses(account)                     — 根据满足率更新状态
+6. SettleDailyInterest(account)                       — 结算存款利息
+   ├─ IsDynamic → _dynamicInterestCalculator.CalculateDepositRate
+   └─ !IsDynamic → _fixedInterestCalculator.CalculateDepositRate
+7. _loanService.DailyTick(account, _config, _fixedInterestCalculator)
+8. _accountService.Save(account)                      — 持久化
+```
+
+与 V3.1/V3.2 设计流程的关键差异：
+- 无 MessageScheduler 临时风险覆盖（桩未接入）
+- 无 BankruptcyHandler 倒闭检测（阶段八/九待实现）
+- 无复利冷却检测（UseCompoundInterest 仅影响计息公式，冷却期未实现）
+- 无保护期结束当日额外处理（在 UpdateCompanyStatuses 中统一处理）
+- 无生成失败反馈（手机/电视/邮件候补队列未实现）
+
+---
+
+补丁三：CompanyManager 关键私有方法
+
+3.1 CheckAndGenerateNewCompanies — 无优先级排序（V3.2 补丁三未实现），按 CropShipments 原始顺序遍历。
+
+3.2 IsCropOnBankruptcyCooldown — 1 完整季节冷却，冬季倒闭→春季冷却（跨年处理）。
+
+3.3 UpdateCompanyStatuses — 满足率判定（比例制，非 V3.2 的绝对数量阶梯）：
+```
+> 150%     → Prosperous
+80%-150%  → Stable
+30%-80%   → Hungry
+< 30%     → Dying
+```
+New 状态保护期（3天）内不参与判定。
+
+3.4 GetMaxWithdrawal（V3.3.1 资产池）：
+```
+effectiveLoanLimit = company.LoanLimit × statusMultiplier
+  (Hungry×0.6, Dying/Protection×0.3, others×1.0)
+assetPool = max(0, effectiveLoanLimit - outstandingPrincipal)
+maxWithdrawal = min(depositBalance, max(0, assetPool))
+```
+
+3.5 GenerateDynamicCompany — 初始燃料 = Smax × 0.3 × 10 FP，保护期 3 天，状态 New。
+
+---
+
+补丁四：FuelService 实际实现细节
+
+文件：Services/Core/FuelService.cs（114 行）
+
+4.1 内部常量（非静态类，直接硬编码）
+
+```
+FPPerCrop = 10          // 1 标准作物 = 10 FP
+QualityIridium = 4
+QualityGold = 2
+IridiumBonus = 10        // 铱星额外 +10 FP（总计 +20）
+GoldBonus = 5            // 金星额外 +5 FP（总计 +15）
+ExternalPenalty = 5      // 购买/商店卖出 -5 FP/个
+```
+
+4.2 RecordShippingBinSale（直接操作参数 account，无内部 Load/Save）
+
+```csharp
+// fpGain = quantity × 10 + quality bonus
+// company.FuelStock += fpGain, capped at Smax × 10
+```
+
+4.3 UpdateDailyInventory（直接操作参数 account，无内部 Load/Save）
+
+```csharp
+// statusCoefficient: Prosperous×1.0, Stable/New×0.8, Hungry×0.5, Dying/Protection×0.3
+// dailyConsumption = (int)(DBase × statusCoefficient × FPPerCrop)
+// company.FuelStock -= dailyConsumption, floor at 0
+```
+
+4.4 GetSatisfactionRate / GetDisplayFuelStock（只读操作，内部 Load）
+
+```csharp
+GetSatisfactionRate: return company.FuelStock / (DBase × FPPerCrop)
+GetDisplayFuelStock: return company.FuelStock / 10.0
+```
+
+---
+
+补丁五：DynamicCompanyInterestStrategy 实际实现
+
+文件：Services/Core/Interest/DynamicCompanyInterestStrategy.cs（121 行）
+
+5.1 3 段式折扣规则（V3.5 patch5 一致）
+
+```
+R > 20%:     deposit = R × 0.5,   loan = R × 0.75
+0% < R ≤ 20%: deposit = R,         loan = R × 1.5
+R ≤ 0%:      deposit = 0 (clamp),  loan = 0
+贷款下限：Max(0.01, calculatedRate) — 硬锁 +1%
+```
+
+5.2 作物查找：`CropDataProvider.GetByCode(company.CropCode ?? company.Name)`
+若 null → FallbackRate（直接用 config 利率 + 天气/运气浮动）
+
+5.3 天气/运气浮动：与 FixedCompanyInterestStrategy 相同逻辑
+
+---
+
+补丁六：BankMod 入口变更汇总
+
+6.1 DayEnding 事件（新增）
+1. 移除出货箱中的手机（双重保护，Type="Quest" 理论上已不可出货）
+2. _services.ShipmentTracking.ProcessShipments(account, _services.FuelService, Monitor)
+3. Save
+
+6.2 Phone Type = "Quest"（原 "Basic"）— 不可出售/不可出货
+
+6.3 InventoryChanged 防误判：`if (Game1.activeClickableMenu is not null) return;`
+
+6.4 GMCM 燃料标签："日耗"（原"D"）、"燃料上限"（原"Smax"）
+
+---
+
+补丁七：BankMenu 动态公司 UI 适配
+
+- _companyList 统一列表替换所有 _config.Companies 引用
+- 14 个回调传入 _selectedCompanyIndex 保持标签页位置
+- 燃料显示：库存/上限 (百分比) + 颜色编码 + 日消耗作物名称
+- 状态显示："新公司·保护期剩余 N 天"/"繁荣"/"稳定运营"/"燃料不足·饥饿"/"濒危"/"濒死保护期"
+- 取款资产池校验：GetMaxWithdrawal
+
+---
+
+补丁八：关键 Bug — 持久性覆盖模式（最重要教训）
+
+**Bug 模式**：服务内部 Load → 修改 → Save → 调用方保存 stale 副本覆盖变更
+
+出现位置：
+1. RecordShippingBinSale 内部 Load/Save → OnDayEnding 随后 Save 覆盖 ✅ 已修复
+2. UpdateDailyInventory 内部 Load/Save → OnDayStarted 随后 Save 覆盖 ✅ 已修复
+
+**解决方案**：写入方法接收 BankAccountData 参数，直接操作传入对象，由调用方统一 Load/Save。
+
+**新规范**：
+- 写入方法：接受 BankAccountData 参数，不内部 Load/Save
+- 只读查询：可内部 Load（如 GetSatisfactionRate、GetDisplayFuelStock）
+- 调用方：在生命周期末端统一 Save
+
+---
+
+补丁九：Stage 6 新增/变更配置参数
+
+| 参数 | 默认值 | 说明 |
+|---|---|---|
+| CompanySpawnRequiredSellCount | 50 | 动态公司生成所需累计出售量 |
+| DynamicCompanyInitialDepositLimit | 500000 | 新公司初始存款上限 |
+| LowCropLoanLimit | 50000 | 低 R 作物（R≤10%）贷款上限 |
+| MediumCropLoanLimit | 80000 | 中 R 作物（10%<R≤20%）贷款上限 |
+| HighCropLoanLimit | 100000 | 高 R 作物（R>20%）贷款上限 |
+| MaxDynamicCompanies | 4（硬编码） | 总席位上限 |
+| MaxNewPerSeason | 2（硬编码） | 单季新增上限 |
+| NewCompanyProtectionDays | 3（硬编码） | 新公司保护期（V3.2 从 14→3） |
+| UseCompoundInterest | false（默认变更） | 复利默认关闭 |
+
+---
+
+补丁十：项目结构更新（Stage 6 实际文件清单）
+
+新增 4 文件：
+  Data/CropShipmentData.cs            — 按作物出货追踪数据
+  Data/DynamicCompanyData.cs          — 动态公司运行时数据
+  Services/Core/ShipmentTrackingService.cs — 出货箱监控服务
+  Services/Core/Interest/DynamicCompanyInterestStrategy.cs — 动态公司利率策略
+
+变更 10 文件：
+  Data/BankAccountData.cs             — +CropShipments, +DynamicCompanies, +SpawnCounter
+  Data/ModConfig.cs                   — +CropCode, +IsDynamic to CompanyDefinition; UseCompoundInterest→false
+  Services/Abstractions/ICompanyManager.cs — +2 方法
+  Services/Abstractions/IFuelService.cs    — 完整 6 方法签名
+  Services/Core/CompanyManager.cs     — 完全重写为生命周期编排器（349 行）
+  Services/Core/FuelService.cs        — 从桩替换为完整实现（114 行）
+  Services/Core/ModServices.cs        — +ShipmentTracking, +双 InterestCalculator 注入
+  BankMod.cs                          — +DayEnding, Phone Type=Quest, 防误判守卫
+  UI/BankMenu.cs                      — +_companyList, +标签页保持, +燃料显示, +资产池
+
+---
+
+代码审查清单更新（V3.6 Stage 6 追加）
+
+| 校验项 | 严重程度 |
+|---|---|
+| FuelService 写入方法接收 BankAccountData 参数（非内部 Load/Save） | 致命 |
+| CompanyManager.OnDayStarted 只调用一次 Save（末端统一持久化） | 致命 |
+| DayEnding 的 ProcessShipments 在 Save 之前执行 | 致命 |
+| 咖啡豆不生成动态公司（CropDataProvider.IsExcluded） | 致命 |
+| 动态公司贷款利率下限 +1% 强制执行 | 高 |
+| 保护期日数 = 3（非 V3.1 的 14） | 中 |
+| 所有 BankMenu 回调传入 _selectedCompanyIndex | 中 |
+| Phone Type = "Quest"（不可出货/出售） | 中 |
+| 季度切换时 DynamicCompaniesSpawnedThisSeason 重置 | 高 |
+| 取款金额不超过资产池（Hungry/Dying/Protection 状态） | 致命 |
+| Compound interest 默认 false | 低 |
+
+---
+
+文档版本记录（V3.6）
+
+| 项目 | 内容 |
+|---|---|
+| 补丁版本 | V3.6（阶段六实际实现记录） |
+| 基于架构版本 | V3.5 patch5 |
+| 新增 | ShipmentTrackingService、完整 FuelService、动态公司生成逻辑、资产池取款、BankMenu 统一列表 |
+| 关键修正 | 保护期 14→3 天、复利默认 false、燃料持久化覆盖 Bug ×2、接口签名精确化 |
+
+---
+
+补丁十一：V3.7 手动复利检测 + 利息硬顶 + 资产池修正 + UI 优化（2026-05-04）
+
+一、手动复利检测机制（patch!!!.txt 核心内容）
+
+  问题：玩家每日将产生的利息取出后存回同一公司，使本金呈日复利增长。
+  严重性：不需任何资源投入即可指数爆炸，破坏所有其他金融机制。
+
+  检测算法（7天滑动窗口 + 峰值突破）：
+  1. 每日计算本金增量 delta = BaseAmount - PreviousBaseAmount
+  2. 正值写入 RecentPrincipalDeltas[7] 滚动窗口
+  3. 从旧到新扫描窗口内所有正增量：
+     - 未触发"第一次变大"：跳过未变大的增量，直到 delta > 最近正增量 → 触发，记录峰值，计数=1
+     - 已触发后：delta > 当前峰值 → 刷新峰值，计数+1
+  4. 窗口内峰值突破累计 ≥ 3 次 → 标记惩罚（7天，存款利率 ×0.10）
+  5. 窗口每 7 天重置状态
+  6. 惩罚期剩余天数逐日递减
+
+  设计原则：
+  - 不追踪资金来源，只看本金增量是否持续变大
+  - 不限制存取款
+  - 不跨公司比对
+  - 不预设基准（杠杆不会自动成为护身符）
+  - 仅影响存款利率，贷款利率不受影响
+
+  实现位置：
+  - CompanyManager.DetectManualCompoundInterest() — 在 SettleDailyInterest 之后调用
+  - InterestCalculationContext.IsPenaltyPeriod — 传递给利率策略
+  - CompanyAccount 新增 8 个字段：RecentPrincipalDeltas[7], WindowDayIndex, HasFirstIncrease,
+    LastPositiveDelta, WindowPeak, WindowBreakCount, PenaltyDaysRemaining, PreviousBaseAmount
+  - Fixed/Dynamic 利率策略：计算末端 ×0.10 if IsPenaltyPeriod
+  - BankMenu.BuildContext: 传递 IsPenaltyPeriod
+
+二、复利公式根因修复
+
+  问题：UseCompoundInterest=true 时利息按 DepositBalance（含累计利息）计算 → 利滚利。
+  修复：利息始终按 BaseAmount（本金）计算，删除 UseCompoundInterest 分支。
+
+  公式变更：
+    之前：interest = UseCompoundInterest ? DepositBalance * rate : BaseAmount * rate
+    现在：interest = BaseAmount * rate
+
+三、利息不可突破存款上限
+
+  问题：利息叠加可使 DepositBalance 超过 DepositLimit。
+  修复三层面防御：
+  1. 计息基数钳位：interestBase = min(BaseAmount, DepositLimit)
+  2. 利息入账截断：若 DepositBalance + interest > DepositLimit，裁掉超出部分
+  3. AccInt 只记录实际入账部分（被裁掉的利息不计入累计）
+
+四、BaseAmount 负值安全重置
+
+  问题：取款时 BaseAmount = max(0, BaseAmount - amount) 钳到 0，但 AccumulatedInterest 不随之减少。
+  当 AccInt > DepositBalance 时，BaseAmount 计算为负值 → 钳到 0 → 利息为 0。
+  修复：SettleDailyInterest 中，若 BaseAmount ≤ 0 且 DepositBalance > 0，
+        重置 AccInt=0, BaseAmount=DepositBalance, PreviousBaseAmount=BaseAmount。
+
+五、资产池规则修正
+
+  问题：固定公司也有资产池概念，且动态公司所有状态都依赖资产池。
+  修复：
+  - 固定公司：取款上限 = DepositBalance（无资产池限制）
+  - 动态公司 Stable/Prosperous/New/Protection：同上，无限制
+  - 动态公司 Hungry：资产池 = LoanLimit × 0.6 - 未还本金
+  - 动态公司 Dying：资产池 = LoanLimit × 0.3 - 未还本金
+
+六、NumberInputMenu 全部按钮激活
+
+  NumberInputMenu 已有 FormatWithCommas（逗号格式化）、首数字0无效、FillMax 等功能，
+  此前未传参数导致不可见。现在存入/取出按钮传入 maxAmount + allButtonLabel：
+  - 存入 → "全部存入" 按钮，填入 min(持有金币, 剩余存款额度)
+  - 取出 → "全部取出" 按钮，填入当前最大可取金额
+  - 点击全部按钮不直接执行，只填入输入框
+
+七、V3.7 数据字段（CompanyAccount 新增）
+
+  | 字段 | 类型 | 说明 |
+  |------|------|------|
+  | RecentPrincipalDeltas | int[7] | 7天滚动窗口的每日本金增量 |
+  | WindowDayIndex | int | 当前窗口写入位置（0-6） |
+  | HasFirstIncrease | bool | 是否已触发"第一次变大" |
+  | LastPositiveDelta | int | 最近的正增量值 |
+  | WindowPeak | int | 当前窗口内的增量峰值 |
+  | WindowBreakCount | int | 当前窗口内峰值突破次数 |
+  | PenaltyDaysRemaining | int | 惩罚期剩余天数（0=未惩罚） |
+  | PreviousBaseAmount | int | 前日本金（计算增量用） |
+
+  InterestCalculationContext 新增：
+  | IsPenaltyPeriod | bool | 计息时是否处于 V3.7 惩罚期 |
+
+八、V3.7 代码审查清单追加
+
+  | 校验项 | 严重程度 |
+  |---|---|
+  | 手动复利检测在每日利息结算后执行 | 致命 |
+  | 惩罚期利率在计息前被正确应用（×0.10） | 致命 |
+  | 滑动窗口 7 天期满时正确清零状态 | 高 |
+  | 窗口清零不丢失跨窗口的复利模式（临界处理） | 高 |
+  | 利率惩罚标记正确写入存档并在加载后恢复 | 高 |
+  | 利息按 BaseAmount 而非 DepositBalance 计算 | 致命 |
+  | DepositBalance 不可超过 DepositLimit（截断逻辑） | 致命 |
+  | 固定公司无资产池限制 | 高 |
+  | 资产池仅在动态公司 Hungry/Dying 状态生效 | 高 |
+
+九、计算顺序定稿（V3.7 最终版）
+
+  base → +consecutive/decay → -suppression → ×luck → +weather → clamp → ×penalty(0.10) → cap at DepositLimit
+
+十、V3.7 修改文件清单
+
+  | 文件 | 变更 |
+  |------|------|
+  | Data/BankAccountData.cs | CompanyAccount +8 V3.7 字段 |
+  | Domain/InterestCalculationContext.cs | +IsPenaltyPeriod |
+  | Services/Core/CompanyManager.cs | +DetectManualCompoundInterest(), 利息硬顶, AccInt 重置, 资产池修正 |
+  | Services/Core/Interest/FixedCompanyInterestStrategy.cs | 存款利率 ×0.10 惩罚 |
+  | Services/Core/Interest/DynamicCompanyInterestStrategy.cs | 存款利率 ×0.10 惩罚 |
+  | UI/BankMenu.cs | BuildContext +IsPenaltyPeriod, 存入/取出传入 maxAmount+allButtonLabel |
+| 发布日期 | 2026-05-03
+
+═══════════════════════════════════════════════════════════════════
+V3.10 阶段八补丁（2026-05-14）：利息欠债、本金欠债、破产保护
+═══════════════════════════════════════════════════════════════════
+
+一、每日结算流程修正
+
+实际流程（阶段八完成后）：
+1. 适配器捕获时间/天气/运气
+2. FuelService 更新库存与满足率 → 判定公司状态
+3. 新公司保护期内跳过倒闭检测
+4. CompanyManager 检测倒闭条件（燃料=0 → 立即倒闭，清零出售计数）
+5. InterestCalculator 计算存款日利率
+6. 动态公司贷款：每日从现金扣息（现金不足→逾期欠息→利息欠债）
+   固定公司贷款：利息累积到到期日
+7. 到期检测：现金够→自动还款；不够→宽限期
+8. 宽限期结束：强制划扣(现金+低利率存款优先)
+   划扣不够→贷款冻结(IsFrozen)+进入破产
+9. 结算存款利息（破产期间照常）
+10. 手动复利检测
+11. 持久化
+
+★ 与原设计的关键差异：
+  - 破产不在每日管线检测，而是在强制划扣失败时触发
+  - 破产后存款利息照常计算（不冻结）
+  - 破产只禁止借款，不禁止取款/存款
+  - 逾期不禁止借款（只有破产禁借）
+
+二、破产保护规则（最终版）
+
+触发：宽限期结束→强制划扣(现金+全部存款)→仍不够还→贷款冻结+进入破产
+
+冻结贷款行为：
+  - 不计息（DailyTick 跳过 IsFrozen 贷款）
+  - 无到期日
+  - 不扣罚息
+  - 累计利息和逾期欠息保留不清零
+  - 手动还款可结清
+
+破产期间影响：
+  1. 禁止借款（LoanService.IssueLoan 拦截）
+  2. 日间收入追踪（OnUpdateTicked 每帧比较金钱快照，增量×50%扣款偿债）
+  3. 过夜出货收入扣款（DayEnding 快照→DayStarted 比较→×50%扣款）
+  4. 取款/借款豁免扣款（ExemptNextMoneyIncrease 标记）
+  5. 右下角常驻标语
+
+退出破产：所有冻结贷款还清→标志位清零→弹出"恭喜，享受你的春天吧"
+
+三、贷款独立化
+
+- IssueLoan 取消加贷合并，每笔借款独立 LoanRecord
+- 同日、同公司、同周期 → 合并（利率加权平均）
+- 不同日 → 各自独立到期日
+- 逾期部分还款不重置到期日
+- UI 新增"明细/摘要"切换 + 滚动列表(每屏2条) + 逐条还款按钮
+- 一键最大借款/全部还款按钮
+
+四、偿债优先级
+
+ApplyShippingIncomeDeduction 扣款顺序：
+  1. 冻结贷款（破产债务）
+  2. 动态公司贷款 — 剩余天数最少
+  3. 动态公司贷款 — 本金最高
+  4. 按作物 ID 字母序
+  5. 固定公司贷款排最后
+每笔贷款内部：逾期欠息 → 累计利息 → 本金
+
+五、公司状态公式修正
+
+满足率：FuelStock / (Smax × 10)（原为 DBase 分母，与 UI 百分比对齐）
+阈值：>150% 繁荣 | 80-150% 稳定 | 30-80% 饥饿 | <30% 濒死
+燃料上限：Smax × 200%
+UI 显示："够烧 XX 天"（FuelStock/10 / DBase，仅供参考）
+
+六、存款累计利息重算条件扩展
+
+触发条件（SettleDailyInterest）：
+  旧：BaseAmount ≤ 0
+  新：BaseAmount ≤ 0 或 DepositBalance ≤ AccumulatedInterest
+重算公式：AccInt = max(0, DepositBalance - DepositLimit)
+
+七、公司倒闭清理
+
+倒闭时清零：
+  - CropShipmentData.CumulativeSellCount = 0
+  - CropShipmentData.ConsecutiveSellDays = 0
+  - CropShipmentData.LastSellDay = 0
+倒闭公司不再在 UI 中显示（即使有未还贷款，标签页直接移除）
+
+八、数据模型新增字段
+
+BankAccountData:
+  +IsInBankruptcy : bool
+  +BankruptcyWarningShown : bool
+  +IsInPrincipalDebt : bool
+  +IsInInterestDebt : bool
+
+LoanRecord:
+  +OverdueInterest : int
+  +IsInInterestDebt : bool
+  +IsFrozen : bool
+
+九、修改文件清单
+
+| 文件 | 变更 |
+|------|------|
+| Data/BankAccountData.cs | BankAccountData +4 bool, LoanRecord +OverdueInterest, +IsInInterestDebt, +IsFrozen |
+| Services/Abstractions/IBankruptcyHandler.cs | CheckBankruptcy + ApplyShippingIncomeDeduction 新签名 |
+| Services/Abstractions/ILoanService.cs | +GetCompanyLoans |
+| Services/Core/LoanService.cs | 每日现金扣息, 利息欠债, 强制划扣, 破产冻结, 贷款独立化, 同日合并, 逾期不重置到期日 |
+| Services/Core/BankruptcyHandler.cs | 桩→完整实现, 偿债优先级排序 |
+| Services/Core/CompanyManager.cs | 满足率 DBase→Smax, 倒闭清零出售计数, AccInt 重算条件扩展, 移除破产拦截利息 |
+| Services/Core/ModServices.cs | BankruptcyHandler 注入, +ExemptNextMoneyIncrease |
+| Services/Core/ShipmentTrackingService.cs | 移除 PendingShippingIncome |
+| BankMod.cs | DayEnding 快照, DayStarted 过夜扣款, UpdateTicked 日间追踪, RenderedHud 标语, 豁免标记 |
+| UI/BankMenu.cs | 破产/欠债横幅, 明细/摘要切换, 滚动列表+滚动条, 逐条还款, 一键最大, 强制刷新标志位 |
+| demand.txt | 阶段八标注完成 + 实际偏差 + 补丁记录 |
+| 架构重构报告 V2.0.txt | 新增第十六章阶段八执行报告 |
+
+
+═══════════════════════════════════════════════════════════════════
+V3.11 阶段九补丁（2026-05-14）：公司倒闭·债券转移·阶梯清算·入股救市
+═══════════════════════════════════════════════════════════════════
+
+一、倒闭判定（简化）
+
+  移除 V3.10 中的三种濒临破产条件检测（无交易天数/利率负值天数/存款枯竭阈值）。
+  移除相关 config 字段：BankruptcyNoTradeDays/BankruptcyRateNegativeDays/
+  BankruptcyDepositThreshold/PreBankruptcyGraceDays。
+  移除相关 GMCM 滑块。
+
+  当前倒闭唯一触发：燃料耗尽（fuel=0 且状态=Dying）→ 债券转移 + 阶梯清算。
+
+二、债券转移（9.2）
+
+  TransferLoansFromDyingCompany(account, company)：
+    1. 查找动态公司的所有非冻结贷款
+    2. 找到贷款利率最高的固定公司（config.Companies.OrderByDescending(LoanInterestRate)）
+    3. 转移属性：CompanyName→接收公司, 利率×DebtTransferRateDiscount(50%), 周期=28天, 重置到期日
+    4. IsTransferred=true（不计入接收公司贷款额度）
+    5. 聊天框提示
+
+三、阶梯清算（9.3）
+
+  LiquidateCompany(account, company)：
+    1. 按倒闭时状态读取返还比例（config.XXXReturnRate）
+    2. 阶梯校验：稳定期≤繁荣期
+    3. 返还金额 = BaseAmount × 返还比例
+    4. 入股注资清零
+    5. CompanyAccount 清零
+    6. 公司标记 Bankrupt + 冷却信息
+    7. CropShipmentData 归零
+
+四、重组期与入股救市（9.5）
+
+  重组期触发：公司首次进入濒死 → RestructuringDaysRemaining=0（需玩家购买天数）
+  入股救市（RescueInvestMenu.cs 弹窗）：
+    - 每百股价格 = 有效贷款上限 / 7
+    - +/- UI 选择购买数量（1~7），累计上限 7（TotalRescueSharesPurchased）
+    - 每百股 = 1 天重组期
+  重组期内：
+    - 燃料不减少（快照→燃料更新→恢复）
+    - 濒死限制（禁借贷、限取款）
+    - 状态冻结
+  复活条件：燃料满足率 ≥ 80%（脱离饥饿期=稳定）
+  复活效果：PendingRescueDeposit×2 计入存款本金 + 状态设为 Stable
+  重组期到期：ProgressRestructuring 检测 RestructuringDaysRemaining≤0 → 清算
+  重组结束时：TotalRescueSharesPurchased 清零
+
+五、状态乘数体系
+
+  利率乘数（GetAllCompanyDefinitions 应用）：
+    繁荣×1.2 | 稳定×0.9 | 饥饿×0.7 | 濒死×0.4
+
+  贷款上限乘数（GMCM 可配，/10 为实际乘数）：
+    繁荣×1.0 | 稳定×0.9 | 饥饿×0.6 | 濒死×0.3
+
+六、资产池与操作限制
+
+  资产池 = 有效贷款上限 - 未还本金
+  剩余池 = 资产池 - AssetPoolConsumed（已取额度）
+  最大取款 = min(存款余额, 剩余池)
+
+  饥饿期/濒死期：
+    - 取款：≤ 资产池余额
+    - 借贷：禁止（IssueLoan + UI 拦截）
+  繁荣期/稳定期：无限制
+
+  资产池消耗重置：状态离开饥饿/濒死时 AssetPoolConsumed=0
+
+七、新增/修改文件
+
+  Data/DynamicCompanyData.cs:
+    +RestructuringDaysRemaining : int
+    +TotalRescueSharesPurchased : int
+    +PendingRescueDeposit : int
+    +AssetPoolConsumed : int
+
+  Data/ModConfig.cs:
+    +ProsperousLoanLimitMult/StableLoanLimitMult/HungryLoanLimitMult/DyingLoanLimitMult : int
+    +ProsperousReturnRate/StableReturnRate/HungryReturnRate/DyingReturnRate : double
+    +RescueInvestmentCapRatio : double
+    -BankruptcyNoTradeDays/BankruptcyRateNegativeDays/BankruptcyDepositThreshold/PreBankruptcyGraceDays
+    -BorrowingHardCap
+
+  Services/Abstractions/ICompanyManager.cs:
+    +RescueInvest(BankAccountData, string, int) : bool
+
+  Services/Core/CompanyManager.cs:
+    +TransferLoansFromDyingCompany +LiquidateCompany +RescueInvest +ProgressRestructuring
+    修改 GetMaxWithdrawal（AssetPoolConsumed 追踪，单次乘数）
+    修改 GetAllCompanyDefinitions（利率/贷款上限乘数）
+    修改 UpdateCompanyStatuses（重组期检测/跳过/复活）
+    -TrackShippingAndRateDays -CheckAndProgressPreBankruptcy -EnterPreBankruptcy -GetEffectiveDepositRate
+
+  Services/Core/LoanService.cs:
+    -BorrowingHardCap 约束
+    +IsTransferred 排除
+    +饥饿/濒死禁借贷
+
+  BankMod.cs:
+    GMCM：+四状态贷款上限乘数 +返还比例；-9.1 条件 -硬封顶
+
+  UI/BankMenu.cs:
+    +入股救市按钮（Dying 状态时）
+    +饥饿/濒死借贷拦截
+    +重组期状态显示
+    +取款 BaseAmount 安全
+    -BorrowingHardCap 约束
+
+  UI/RescueInvestMenu.cs:
+    +新文件：百股购买弹窗（480×320，+/- 计数 + 确定/取消）
+
+
+═══════════════════════════════════════════════════════════════════
+V3.12 阶段十补丁（2026-05-14）：电视金融频道 FBN
+═══════════════════════════════════════════════════════════════════
+
+一、实现方式
+
+  Harmony Prefix on TV.checkForAction（return false 跳过原方法）：
+    1. 重建频道对话框，插入 FBN 选项
+    2. 保留原版周期性频道（Livin/QueenOfSauce/钓鱼频道）
+    3. 选 FBN -> 反射 private int currentChannel = 7
+    4. 反射 private TemporaryAnimatedSprite screen = TV3.png 动画精灵
+    5. 退出：tv.turnOffTV()（公开方法，自动设 screen=null, currentChannel=0）
+
+二、内容生成优先级（FbnNewsGenerator）
+
+  B（最高）：献祭进度 / Joja 会员路线
+    - JojaMember mail -> Joja 路线报道
+    - ccIsComplete mail -> 社区中心全完成
+    - ccCraftsRoom/ccPantry mail -> 献祭进行中
+
+  三：特殊日期
+    - 冬1日：刘易斯年度经济演讲
+    - 春1日：新年特辑
+
+  二：动态公司诞生微讯
+    - 当日 GenerationDay == today 的新公司
+    - 40 种作物微讯库（TV.txt 二 内容，每种 1-2 句）
+
+  C：全局财经事件（30% 概率）
+    - 随机涨跌 + 天气影响分析
+
+  A（最低）：每日利率预测
+    - 模拟明日运气 + Game1.weatherForTomorrow
+    - 预测 3 家动态公司利率涨跌（▲/▼/→）
+
+  D/E（最低）：通用节目（EnableLuckInfluence && EnableWeatherInfluence == false 时）
+    - 随机 4 种访谈（刘易斯/玛妮/威利/格斯）
+
+三、新增/修改文件
+
+  Patches/TVPatch.cs          +新：Harmony Prefix + Postfix on TV
+  Patches/FbnNewsGenerator.cs +新：6 场景内容生成器 + 40 作物微讯
+  BankMod.cs                  +System.IO +FBNScreen AssetRequested +Harmony 注册
+  demand.txt                  阶段十更新为实际实现状态
+  TV.txt                      [用户编写] 完整频道内容设计文档
+
+
+
+═══════════════════════════════════════════════════════════════════
+V3.13 季节过渡机制补丁（2026-05-14）：3天观望 + 四种去向 + FBN快讯
+═══════════════════════════════════════════════════════════════════
+
+一、机制概述
+
+  季节第 1 天：非新公司的动态公司进入 3 天观望期（SeasonTransitionDays=3）
+  第 1-3 天：状态/倒闭判定冻结，FBN 附加每日快讯（不替代利率预测）
+  第 4 天早晨：ProcessSeasonTransition 处理四种去向
+
+  新公司保护期：14天→3天，保护期内不参与观望期
+
+二、四种去向
+
+  1. 光荣退休
+     条件：繁荣期 + 3天出货量 < CompanySpawnRequiredSellCount
+     概率：20%
+     效果：存款全额退还玩家，贷款债券转移至固定公司，公司关闭
+
+  2. 成功转型
+     条件：繁荣/稳定期 + 公司栏位已满(4) + 存在其他达标作物
+     概率：50%
+     效果：保留存贷款，改名换作物，状态重置为新公司
+
+  3. 倒闭撤退
+     条件：饥饿期(60%) / 濒死期(80%)
+     效果：债券转移 + 阶梯清算（正常倒闭流程）
+
+  4. 硬撑存续
+     其余情况，公司照常运营
+
+三、特殊处理
+
+  - 濒死重组期中的公司：先按燃料满足率判定状态(sat>=80%→Stable, sat>=30%→Hungry, else→Dying)，再决定去向
+  - 倒闭释放季节生成配额(DynamicCompaniesSpawnedThisSeason--)
+  - 处理完去处后重新 CheckAndGenerateNewCompanies（当日补位）
+  - 转型消息显示旧名→新名
+
+四、FBN 电视报道
+
+  第 1-3 天：AddSeasonDailySnippet 在利率预测前附加快讯
+    第 1 天：TV.txt 四季节目开场白
+    第 2 天：过渡过半，公司分化
+    第 3 天：明日公布结果
+  第 4 天：TrySeasonTransitionNews 全屏特别报道（优先级：特殊日期 > 季节过渡 > 公司诞生）
+
+五、跨季清理
+
+  ResetSeasonalSpawnCounter 换季时：
+    - 所有 CropShipmentData 归零（CumulativeSellCount/ConsecutiveSellDays/LastSellDay）
+    - DynamicCompaniesSpawnedThisSeason=0
+
+六、新增数据字段
+
+  DynamicCompanyData:
+    +SeasonTransitionDays : int (3→0，0=不在观望期)
+
+七、修改文件
+
+  CompanyManager.cs        ProcessSeasonTransition + NewCompanyProtectionDays→3 + 换季清零出货 + 倒闭释放配额 + 当日补位
+  BankMenu.cs              季节观望状态 overlay [季节观望剩X天]
+  FbnNewsGenerator.cs      季节过渡快讯(第1-3天) + 特别报道(第4天) + 四季开场白
+  TV.txt                   四种去向更新为代码对齐版本
+  DynamicCompanyData.cs     +SeasonTransitionDays
+
+
+
+═══════════════════════════════════════════════════════════════════
+V3.14 阶段十一补丁（2026-05-14）：季节初农产品采购 + 阶段十二标记完成
+═══════════════════════════════════════════════════════════════════
+
+一、季节初采购机制
+
+  触发时间：每季节第 1-3 天
+  访问方式：点击 JojaMart/皮埃尔柜台 -> 选择框「购买商品」或「出售农产品」
+
+  选择「购买商品」-> 原版商店注入限量当季农产品
+  选择「出售农产品」-> 跳转 JojaSupplyMenu 打压界面
+
+二、作物筛选规则（六重过滤）
+
+  1. CropDataProvider.GetCropsForSeason(season) — 当季（含跨季）
+  2. R > 0（可形成动态公司）
+  3. IsPurchasable = true（皮埃尔出售种子）
+  4. 非献祭作物（Pantry 完成或 JojaMember 后解锁）
+  5. 非姜岛作物（willyBoatFixed 解锁）
+  6. 杨桃需 ccVault（巴士修复）
+
+三、商店注入方式
+
+  InjectSeasonalCrops(shop, shopId)：
+    1. 遍历 CropDataProvider.AllCrops 按六重过滤
+    2. 通过 sellToStorePrice() 获取基础售价，x2 为采购价
+    3. 写入 shop.itemPriceAndStock（ItemStockInformation(price, stock=10-已售)）
+    4. 每日限购 10 个/种/店，SeasonShopSold 字典追踪，换天清零
+    5. 选择框拦截：MenuChanged 关闭 ShopMenu -> 弹出选择 -> _shopSkipped 再进店
+
+四、购买检测
+
+  商店关闭时差量检测（_preShopInventory）：
+    1. 逐物品比对 pre/post 数量
+    2. 差量 > 0 -> 匹配 cropCode（ShipmentTrackingService.NormalizeItemId）
+    3. 对应公司 FuelStock -= bought x 5
+    4. 计入 SeasonShopSold 日追踪
+
+五、阶段十二标记完成
+
+  12.1 净资产计算 -> LoanService.GetGlobalCreditLimit（阶段八）
+  12.2 全局借款上限 -> 净资产 x 杠杆系数，BorrowingHardCap 已移除（阶段九）
+  12.3 状态绑定贷款上限 -> 四状态乘数 GMCM 可配（阶段九）
+  12.4 破产借款锁定 -> IssueLoan 拦截（阶段八）
+  标记为已完成。
+
+
+
+═══════════════════════════════════════════════════════════════════
+V3.15 阶段十三补丁（2026-05-14）：多人模式完整实现
+═══════════════════════════════════════════════════════════════════
+
+一、消息协议
+
+  ConfigSyncMessage（主机->客机）：
+    JojaDepositRate/JojaLoanRate/PierreDepositRate/PierreLoanRate
+    EnableLuckInfluence/EnableWeatherInfluence/UseCompoundInterest
+    CompanySpawnRequiredSellCount/BankruptcyIncomeDeduction
+
+  BankOperationRequest（客机->主机）：
+    Operation(Deposit/Withdraw/Borrow7/Borrow14/Repay/Transfer)
+    CompanyName/Amount/SenderId/TargetPlayer(转账用)
+
+  BankDataSync（主机->全体）：
+    SenderId/CompanyName/NewDepositBalance/NewLoanPrincipal
+
+  BankSnapshot（主机->全体，日结算后）：
+    List<CompanySnapshot>(Name/Status/DepositRate/LoanRate/DepositBalance/LoanPrincipal)
+    IsInBankruptcy/PlayerMoney
+
+二、事件流
+
+  PeerConnected：
+    主机 -> 构造ConfigSyncMessage -> SendMessage(MsgConfigSync, targetPeer)
+
+  ModMessageReceived：
+    ConfigSync -> 客机覆盖本地ModConfig
+    BankOperation -> 主机ProcessRemoteOperation
+    BankDataSync -> 客机更新本地账户
+    BankSnapshot -> 客机全量同步
+
+  ProcessRemoteOperation：
+    1. 检查操作锁(_operationLocks[req.SenderId])
+    2. 解析Operation类型，执行对应金融操作
+    3. 发送BankDataSync广播
+    4. 释放操作锁
+
+  OnDayStarted：
+    主机 -> 构造BankSnapshot(所有公司状态+余额) -> SendMessage(MsgBankSnapshot)
+
+三、操作锁
+
+  Dictionary<long, bool> _operationLocks
+  客机ID为键，操作期间锁定，finally释放。防止同一客机并发请求导致数据竞争。
+
+四、客户端UI修改
+
+  BankMenu各按钮handler：
+    原：if(!IsMainPlayer) -> 提示 多人模式开发中
+    新：if(!IsMainPlayer) -> _services.SendRemoteOperation(op, company, amount, null)
+
+五、日志标记（[MP] 前缀）
+
+  [MP] PeerConnected      连接事件（含ID/IsHost/IsMainPlayer）
+  [MP] ConfigSync         配置同步（含利率详情）
+  [MP] BankOperation      远程操作（含Op/Company/Amount/Sender/Target）
+  [MP] BankDataSync       操作同步（含余额变更前后对比）
+  [MP] Snapshot           快照（含公司数/破产状态/逐公司余额变更）
+
+六、修改文件
+
+  Messages/MultiplayerMessages.cs  +新：4消息DTO
+  BankMod.cs                       OnPeerConnected+OnModMessageReceived+ProcessRemoteOperation+操作锁+快照+[MP]日志
+  Services/Core/ModServices.cs     +SendRemoteOperation
+  UI/BankMenu.cs                   IsMainPlayer->远程操作
+
+七、阶段十四：路线完成事件与网购系统（V3.15）
+
+7.1 路线检测
+
+  触发源：
+    - Joja 路线：事件 ID 502261（J/w sunny/H）开始 → 标记路线 "Joja"
+    - CC 路线：  事件 ID 191393 开始 / 进入 AbandonedJojaMart → 标记路线 "Community"
+    - 旧存档：  OnSaveLoaded 调用 DetectRouteCompletion()
+        - CC：hasCompletedCommunityCenter() || ccIsComplete
+        - Joja：JojaMember && HasAllJojaProjects()（5个项目邮件：ccMinecart/ccBus/ccBridge/ccGreenhouse/ccFishTank）
+
+  字段：_seenCutscene, _lastEventActive, _oldSavePending, _modEventPlaying, _routeEffectsApplied
+
+7.2 路线效果应用（ApplyRouteEffects）
+
+  触发时机：香草事件开始（非网购解锁），存档独立
+
+  改名规则（_originalCompanyNames 备份 → 恢复 → 改名）：
+    - CC 路线：  Joja超市 → 皮埃尔子公司，PierreBoosted=true
+    - Joja 路线： 皮埃尔的杂货店 → Joja子公司，JojaBoosted=true, PierreSuppressionDisabled=true
+
+  效果表：
+    ┌──────────┬──────────────────┬──────────────────┐
+    │          │ CC 路线           │ Joja 路线         │
+    ├──────────┼──────────────────┼──────────────────┤
+    │ 打压上限  │ 皮埃尔 SuppressMaxStacks×2(6层) │ Joja SuppressMaxStacks×2(6层) │
+    │ 季节作物  │ 皮埃尔 20个/天   │ Joja 20个/天, 皮埃尔 无 │
+    │ 柜台打压  │ 皮埃尔 保留       │ 皮埃尔 失去（仅购买） │
+    └──────────┴──────────────────┴──────────────────┘
+
+7.3 过场动画系统（StartRouteEvent）
+
+  指令映射（.txt → SDV 事件指令）：
+    /text "..."          → message "..."          旁白（无头像）
+    /speak NPC "..."     → speak NPC "..."         NPC 对话（CC 路线）
+                        → message "..."           纯文字（Joja 路线：黑屏模式）
+    /speak Phone "..."   → jump Pierre + speak Lewis  电话对话
+    /pause ms            → pause ms               等待
+    /emote NPC ID        → emote NPC ID           NPC 表情
+    /move NPC X Y        → warp NPC X Y           移动 NPC
+    /cutscene spawnJunimo → _junimoSpawnFrames 计时 → SpawnJunimos()
+    /end                 → end + UnlockOnlineShopping()
+
+  事件头部：
+    - CC：continue/6 8/farmer 6 10 0 Pierre 6 8 2    皮埃尔可见，玩家朝上
+    - Joja：continue/-1000 -1000/farmer -1000 -1000 0/globalFade/pause 100  黑屏模式
+
+  事件播放：Game1.currentLocation.startEvent(new Event(script, Game1.player))
+  事件结束检测：_modEventPlaying && !eventActive → UnlockOnlineShopping()
+
+  祝尼魔生成（SpawnJunimos）：
+    累计 pause 时间计算 _junimoSpawnFrames → 逐帧倒数 → TemporaryAnimatedSprite(LooseSprites/Junimos, 3x, 6帧, 150ms)
+
+  CC 旧存档特殊处理：
+    - 电影院已建成（ccMovieTheater）→ 跳过过场，直接解锁网购
+    - 否则仅在进入 AbandonedJojaMart 时触发（OnWarped）
+
+7.4 网购系统
+
+  解锁条件：路线过场动画播放完毕（UnlockOnlineShopping）
+
+  营业时间限制（BankMenu.GetShopClosedReason）：
+    ┌──────────┬──────────┬──────────┬────────────┐
+    │ 商店      │ 营业时间  │ 休息日    │ 解锁条件    │
+    ├──────────┼──────────┼──────────┼────────────┤
+    │ 皮埃尔    │ 9-21     │ 周三+夏26│ -          │
+    │ 铁匠铺    │ 9-16     │ 周四      │ -          │
+    │ 木匠铺    │ 9-20     │ 周二      │ -          │
+    │ Joja     │ 9-23     │ 周六      │ -          │
+    │ 沙漠      │ 9-23     │ 周二      │ 公交修复    │
+    │ 姜岛      │ 全天      │ -        │ 船只修复    │
+    └──────────┴──────────┴──────────┴────────────┘
+  选择列表显示 [关闭原因]，点击弹 "该商店未营业（原因）"
+
+7.5 修改文件
+
+  BankMod.cs                        +Stage14 全流程（事件检测/路线效果/过场/网购解锁）
+  Services/Core/ModServices.cs      +CompletedRoute, OnlineShoppingUnlocked, PierreBoosted, JojaBoosted
+  Services/Core/CompanyManager.cs   +PierreSuppressionDisabled, JojaSuppressionBoosted, PierreSuppressionBoosted
+  UI/BankMenu.cs                    +GetShopClosedReason, 网购营业时间检查
+  assets/joja.txt                    Joja 过场脚本
+  assets/献祭.txt                     CC 过场脚本（Pierre+Phone+Junimo场景）
+  Data/ModConfig.cs                 +EnableDeliveryFee, DeliveryFeePercentage, DeliveryFeeFlat, OnlineShopList
+
+八、V3.16 SMAPI 合规重构与持久化修复
+
+8.1 架构调整
+
+  ┌─────────────────────────────────────────────────────────┐
+  │ BankMod.cs (Entry)                                      │
+  │   OnSaveLoaded → RouteService.LoadFromSave/DetectRoute  │
+  │   OnUpdateTicked → RouteService.DetectRouteFromEvent    │
+  │   OnWarped → RouteService.DetectRoute + ApplyRouteEffects│
+  │   OnSaving → RouteService.SaveToSave                    │
+  │   OnMenuChanged → RouteService 路线判断 + 三防线         │
+  └──────────┬──────────────────────────────────────────────┘
+             │
+     ┌───────┼──────────────────────────────┐
+     ▼       ▼                              ▼
+  RouteService    EventScriptService    StoreHoursService
+  ·DetectRoute    ·StartRouteEvent      ·GetClosedReason
+  ·ApplyEffects   ·(DSL → SDV Event)    ·(time.txt 解析)
+  ·Persist        ·SpawnJunimos
+                  ·(addTemporaryActor)
+     │
+     ▼
+  CompanyManager
+  ·ApplySuppression (effectiveMaxStacks 根据路线加倍)
+  ·CheckAndGenerate (跨季节清理破产公司)
+
+8.2 路线持久化
+
+  存档键（WriteSaveData / ReadSaveData，存档隔离）：
+    bm_route  → CompletedRoute ("Community" / "Joja" / "")
+    bm_shop   → OnlineShoppingUnlocked
+    bm_fx     → _routeEffectsApplied
+    bm_cut    → SeenCutscene
+    bm_pb     → PierreBoosted
+    bm_jb     → JojaBoosted
+
+  写入时机：OnSaving（存档前） + OnSaveLoaded（路线检测后）
+  旧档迁移：fx=True 但 pb=False/jb=False → 重置 fx 重跑 ApplyRouteEffects
+
+8.3 打压三防线
+
+  防线1：选择框 → 路线完成方不显示"出售农产品"
+  防线2：季节作物 → 路线完成方不注入 InjectSeasonalCrops
+  防线3：店铺卖货 → RecordExternalSale 前路线判断，被压制方不扣 FP
+
+8.4 祝尼魔动画（SDV 1.6 原生指令）
+
+  temporaryAnimatedSprite <texture> 0 0 16 16 150 1 99999 <tileX> <tileY> false false 0 0 1 0 0 0
+  纹理注册：AssetRequested 拦截无斜杠名称（znmz/znmh/znmf/znm）
+
+8.5 破产标语
+
+  BankruptBanner : IClickableMenu → Game1.onScreenMenus
+  破产时 Show()，退出破产 Hide()
+  替代原 OnRenderedHud + Game1.spriteBatch 泄漏方案
+
+8.6 新增文件
+
+  Domain/MailFlags.cs
+  Services/Abstractions/IRouteService.cs
+  Services/Abstractions/IEventScriptService.cs
+  Services/Abstractions/IStoreHoursService.cs
+  Services/Core/RouteService.cs
+  Services/Core/EventScriptService.cs
+  Services/Core/StoreHoursService.cs
+  UI/BankruptBanner.cs
+
+九、V3.17 路线持久化完善与跨存档隔离
+
+9.1 公司改名同步贷款
+
+  路线改名时同步更新 account.Loans 和 account.CompanyAccounts 中的 CompanyName。
+  CC: Joja超市→皮埃尔子公司，Joja: 皮埃尔→Joja子公司。
+  防止改名后已有贷款查找失败、借款上限计算遗漏。
+
+9.2 存档隔离加固
+
+  _config.Companies 全局单例 → 改名 in-place 修改 → 跨存档污染。
+  修复：LoadFromSave 从 config.json 磁盘读原始名 → 先恢复全部 → 再按 fx 应用路线改名。
+
+9.3 破产跨存档
+
+  _lastBankruptcyState 替代 _bankruptExitMessageShown。
+  每帧 true→false 转换弹 "恭喜"。OnSaveLoaded 先 InvalidateCache → Load 初始化状态。
+
+9.4 性能
+
+  BankAccountService.Load() 内存缓存，InvalidateCache() 在 OnSaveLoaded 清缓存。
+
+9.5 FBN 修复
+
+  _bundleNewsShown 路线新闻仅播一次；_cachedContent 每日缓存防重复预测。
+
+9.6 UI
+
+  标题+署名同行；破产标语置顶联动标题下移。
+
+
+十、V3.18 阶段十五完稿：NPC 对话系统（欠债/破产/还清/配偶）+ Bug 修复
+
+10.1 NPC 对话系统总览
+
+  文件：Services/Core/DebtDialogueService.cs（~345 行）+ Patches/NpcDialoguePatch.cs（~60 行）
+
+  四套对话线：
+    DebtLines     — 欠债状态（15% 每日随机触发），三档好感度（<4 / 4-7 / 8+）
+    BankruptLines — 破产状态（每档好感度触发一次，含赠礼），三档好感度
+    CongratsLines — 还清后祝贺（每个 NPC 一次），Pierre/Lewis 专属 + 高好感通用
+    SpouseLines   — 配偶/同居伴侣专属（无随机、无档位、始终触发、专属赠礼）
+
+  数据源：dialog.txt → DebtLines+BankruptLines+CongratsLines
+         dialog2.txt → 补充 NPC 对话
+         dialog3.txt → 补充 NPC 对话
+         dialog4.txt → SpouseLines（11 位配偶+Krobus）
+
+10.2 触发机制
+
+  Harmony Prefix on NPC.checkAction（NpcDialoguePatch）：
+    - 不阻止原版交互（不 return false）
+    - ShouldInjectDialogue 检查条件（不修改状态）
+    - 有对话时设 Game1.afterDialogues，原版对话播完后再播 mod 对话
+
+  ShouldInjectDialogue 逻辑：
+    - 破产状态：按好感度档位判定，跨档位防重复
+    - 欠债状态：15% 随机触发，同日同 NPC 不重复
+    - 配偶检查：isPartner = spouse || isRoommate
+      配偶破产 → 无档位、单次触发、专属赠礼
+      配偶欠债 → 无随机（始终触发）
+
+  TryBankruptcyDialogue：
+    - 普通 NPC：hearts ≥ 8 触发 GiveGift（30+ NPC 赠礼表）
+    - 配偶：始终赠礼，Shane 特殊处理（披萨 206 + 啤酒 346 双赠礼）
+
+10.3 还清祝贺流程
+
+  破产退出检测（OnUpdateTicked）：
+    _lastBankruptcyState=true && !account.IsInBankruptcy → "恭喜，享受你的春天吧！"
+    → TryCongratulate(account) → DebtClearedCongratsShown=true
+    → 随后 NPC 对话触发 afterDialogues → GetCongratsLine → MarkCongratsSpoken
+
+10.4 数据模型新增字段（BankAccountData）
+
+  DebtNpcSpoken          : List<string>  欠债对话已触发标记（"debt_NPC_day"）
+  BankruptcyNpcGifted    : List<string>  破产赠礼已触发标记（"bankrupt_NPC_tier"/"bankrupt_NPC_spouse"）
+  CongratsNpcSpoken      : List<string>  祝贺对话已触发标记（NPC 名）
+  DebtClearedCongratsShown : bool        是否进入祝贺阶段
+
+10.5 本阶段 Bug 修复
+
+  Bug 1 — 祝贺对话不播放：
+    原因：afterDialogues 回调中 MarkCongratsSpoken 先于 GetCongratsLine 执行，
+          MarkCongratsSpoken 将 NPC 加入 CongratsNpcSpoken 列表，
+          GetCongratsLine 检查列表发现 NPC 已在其中 → 返回 null → 对话永不播放
+    修复：交换顺序 — 先 GetCongratsLine 获取文本，再 MarkCongratsSpoken 标记
+
+  Bug 2 — Morris 事件后 Joja 收银员不显示购买/出售选择框：
+    原因：商店拦截守卫仅检查 CompletedRoute（Joja/CC 路线完成），
+          但 Morris 供应架事件独立于路线完成，_morrisEventSeen 无法通过守卫
+    修复：守卫条件改为 if (string.IsNullOrEmpty(CompletedRoute) && !_morrisEventSeen) return;
+
+  Bug 3 — Shane 配偶破产赠礼名称错误：
+    原因：SpouseLines.GetBankrupt 中 Shane 条目 giftName 写为 "披萨+啤酒"，
+          但 GetBankrupt 返回单物品元组，且 TryBankruptcyDialogue 已做 Shane 双赠礼特殊处理
+    修复：giftName 改为 "披萨"，双赠礼逻辑在 TryBankruptcyDialogue 中保持不变
+
+10.6 修改文件清单
+
+  Services/Core/DebtDialogueService.cs   +SpouseLines 类（GetDebt/GetBankrupt/GetCongrats）
+                                         集成 isPartner 检查到所有对话方法
+  Patches/NpcDialoguePatch.cs            修复祝贺对话 MarkCongratsSpoken 顺序
+  BankMod.cs                             Morris 事件守卫条件加 _morrisEventSeen
+  Data/BankAccountData.cs                +4 对话追踪字段
+
+
+═══════════════════════════════════════════════════════════════════
+V3.19 Bug 修复补丁（2026-05-29）：手机丢失检测 + 手机本地化 + 公司名回退
+═══════════════════════════════════════════════════════════════════
+
+一、手机丢失检测修复
+
+  问题：OnDayStarted 中手机丢失检测依赖 in-memory 变量 _phoneSeenInInventory/_phonePutInChest，
+  每日重置为 false → 跨日丢失永远无法触发补发。
+
+  修复：用 SMAPI ReadSaveData/WriteSaveData 持久化存档键 "BankMod_PhoneInChest" 替代：
+    - OnInventoryChanged：手机放入箱子 → WriteSaveData("1")，手机加入背包 → WriteSaveData("0")
+    - OnDayStarted：ReadSaveData("BankMod_PhoneInChest") == "1" → 手机在箱子，非丢失
+    - 删除 _phoneSeenInInventory 和 _phonePutInChest 字段
+
+二、手机本地化修复
+
+  问题：Data/Objects 注入中 DisplayName = I18n.Get("mod.27") 可能因资产缓存返回默认语言值，
+  导致中文版手机显示英文名。
+
+  修复：使用 SDV 1.6 [LocalizedText] 令牌语法：
+    - DisplayName = "[LocalizedText Strings\\Objects:BankMod.Phone]"
+    - Description = "[LocalizedText Strings\\Objects:BankMod.Phone_Desc]"
+    - 新增 Strings/Objects 资产注入，写入 I18n.Phone_Name()/I18n.Phone_Description()
+    - TokenParser 运行时解析，每次访问按当前语言正确本地化
+
+三、公司名回退修复（两子问题）
+
+  子问题 A — 债券转移泄漏本地化名称：
+    TransferLoansFromDyingCompany 中 loan.CompanyName = bestFixed.Name
+    → 可能是中文子公司名（如"皮埃尔子公司"）→ 写入存档后影响贷款查找/借款上限
+    修复：bestFixed.Name → bestFixed.OriginalName（始终为英文原始标识符）
+
+  子问题 B — 已损坏存档无法迁移：
+    RouteService.KnownTranslations 缺少子公司名称映射
+    → MigrateLoanNames 无法识别存档中的中文子公司名
+    修复：KnownTranslations 新增 4 条映射：
+      ["皮埃尔子公司"] = "JojaMart"
+      ["Joja子公司"] = "Pierre's General Store"
+      ["Pierre's Subsidiary"] = "JojaMart"
+      ["Joja Subsidiary"] = "Pierre's General Store"
+
+四、修改文件
+
+  | 文件 | 变更 |
+  |------|------|
+  | BankMod.cs | BankMod_PhoneInChest 持久化；[LocalizedText] 令牌；Strings/Objects 注入；删除 2 in-memory 字段 |
+  | Services/Core/CompanyManager.cs | bestFixed.Name → bestFixed.OriginalName |
+  | Services/Core/RouteService.cs | KnownTranslations +4 子公司名称映射 |
+
+五、构建状态
+
+  [OK] 通过（0 错误）
+
+
+═══════════════════════════════════════════════════════════════════
+V3.20 Bug 修复补丁（2026-05-29 #2）：公司名泄漏 + 复利/防复利冲突
+═══════════════════════════════════════════════════════════════════
+
+一、公司名泄漏修复（CC路线"双皮埃尔子公司"）
+
+  问题：LoadFromSave 和 ApplyRouteEffects 将 c.Name 从 "JojaMart" 改为 "皮埃尔子公司"，
+  导致 c.Name == ca.CompanyName 匹配失败（ca.CompanyName 存储的是英文 OriginalName）。
+  GMCM WriteConfig 还会将中文 Name 持久化到 config.json，造成跨存档污染。
+
+  修复：彻底停止修改 c.Name，由 GetDisplayName() 全权负责显示名。
+    - LoadFromSave: 删除 c.Name = RouteDisplayNames 赋值，仅保留 boost 标志
+    - ApplyRouteEffects: 删除 c.Name = RouteDisplayNames 赋值，仅保留 boost 标志
+    - c.Name 始终等于 c.OriginalName（稳定标识符），GetDisplayName() 负责本地化显示名
+
+  原则：c.Name = 匹配/存储标识符，GetDisplayName() = UI 显示名，职责完全分离。
+
+二、复利/防复利冲突修复（三个子问题）
+
+  子问题 A — 复利到期日竞态条件：
+    修复前：倒计时在 SettleDailyInterest 之前执行 → 复利最后一天无复利利息 +
+    防复利 continue 守卫失效
+    修复：倒计时移到 DetectManualCompoundInterest 之后执行
+
+  子问题 B — PreviousBaseAmount 在复利期间不更新：
+    修复前：continue 跳过 PreviousBaseAmount 更新 → 到期后 delta 累积
+    修复：continue 分支中仍然更新 PreviousBaseAmount
+
+  子问题 C — 复利到期后滑动窗口残留：
+    修复：复利到期时重置该公司的 RecentPrincipalDeltas + 所有窗口状态
+
+三、修改文件
+
+  | 文件 | 变更 |
+  |------|------|
+  | Services/Core/RouteService.cs | 删除 c.Name = RouteDisplayNames 赋值（LoadFromSave + ApplyRouteEffects） |
+  | Services/Core/CompanyManager.cs | 复利倒计时移至 DetectManualCompoundInterest 之后 |
+  |                            | continue 分支更新 PreviousBaseAmount |
+  |                            | 复利到期时重置滑动窗口 |
+
+四、构建状态
+
+  [OK] 通过（0 错误）

@@ -1,0 +1,15 @@
+# Joja 路线过场动画脚本
+# 触发地点：Town（镇子）
+# 按 SDV 标准过场动画指令编写：
+# /speak <角色名> <文本>
+# /pause <毫秒>
+# /emote <角色名> <表情ID>
+# /move <角色名> <x> <y>
+# /end
+
+/speak Morris "欢迎回来，我们的尊贵会员。$1"
+/pause 500
+/speak Morris "作为Joja生态的一员，你获得的不仅仅是一个会员身份。$0"
+/pause 300
+/speak Morris "现在，拿起你的手机——你会发现一些新的可能性。$1"
+/end

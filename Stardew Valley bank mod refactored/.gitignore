@@ -1,0 +1,28 @@
+# Build output
+bin/
+obj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Rider
+.idea/
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Temporary debug files
+build_errors.txt
+
+# Test screenshots
+T*.png
+error.png
+
+# External plugins (not part of this mod)
+web-access-main/

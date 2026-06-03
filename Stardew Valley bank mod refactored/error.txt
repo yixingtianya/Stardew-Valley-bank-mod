@@ -1,0 +1,40 @@
+[SMAPI]    Skipped mods
+[SMAPI]    --------------------------------------------------
+[SMAPI]       These mods could not be added to your game.
+
+[SMAPI]       - Nyapu Style Immersive Children Portraits because it's an empty folder.
+[SMAPI]       - SMAPI 4.1.10 installer because the SMAPI installer isn't a mod (you can delete this folder after running the installer file).
+
+[SMAPI]    Patched game code
+[SMAPI]    --------------------------------------------------
+[SMAPI]       These mods directly change the game code. They're more likely to cause errors or bugs in-game; if
+[SMAPI]       your game has issues, try removing these first. Otherwise you can ignore this warning.
+
+[SMAPI]       - Dynamic Financial System
+
+
+
+[SMAPI]    No update keys
+[SMAPI]    --------------------------------------------------
+[SMAPI]       These mods have no update keys in their manifest. SMAPI may not notify you about updates for these
+[SMAPI]       mods. Consider notifying the mod authors about this problem.
+
+[SMAPI]       - Dynamic Financial System
+
+[SMAPI] Launching mods...
+[Dynamic Financial System] Config loaded: 2 companies
+[Dynamic Financial System] [TV] FBN channel Harmony patches applied
+[Dynamic Financial System] 动态金融公司系统 v{0} 加载成功！
+[SMAPI] Mods loaded and ready!
+[game] Oops! Steam achievements won't work because Steam isn't loaded. See 'Configure your game client' in the install guide for more info: https://smapi.io/install.
+[SMAPI] Type 'help' for help, or 'help <cmd>' for a command's usage
+[Generic Mod Config Menu] yixingtianya.DynamicFinancialSystem (registering for yixingtianya.DynamicFinancialSystem) is using deprecated code (AddNumberOption(IManifest mod, Func<int> getValue, Action<int> setValue, Func<string> name = null, Func<string> tooltip = null, int? min = null, int? max = null, int? interval = null, string fieldId = null)) that will break in a future version of GMCM.
+[Dynamic Financial System] GMCM registered successfully
+[Content Patcher] Some content packs haven't been updated for Stardew Valley 1.6.0. Content Patcher will try to auto-migrate them, but compatibility isn't guaranteed.
+
+Affected content packs:
+- Lnh's Ginger Island House
+
+For mod authors, see how to update a mod: https://smapi.io/cp-migrate.
+[SMAPI] Couldn't check for a new version of SMAPI. This won't affect your game, but you won't be notified of new versions if this keeps happening.
+[SMAPI] Couldn't check for new mod versions. This won't affect your game, but you won't be notified of mod updates if this keeps happening.

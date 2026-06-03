@@ -1,0 +1,328 @@
+Stage 6 测试流程
+===============
+
+前置条件
+--------
+- 游戏已加载存档，Mod 正常启动
+- SMAPI 控制台可见（建议窗口模式）
+
+═══════════════════════════════════════════════════════════════════
+测试一：出货跟踪
+═══════════════════════════════════════════════════════════════════
+
+目标：验证卖货后存档数据正确记录累计出售数量。
+
+步骤：
+  1. 控制台获取 30 个土豆：
+     player_add (O)Potato 30
+//1.6版本已修正为player_add (O)192 30
+  2. 把土豆扔进出货箱，然后睡觉
+//发现bug，手机可出售，同时出售瞬间会获得手机，与需求不符(依旧不符，以下是控制台信息)
+（2）
+[Dynamic Financial System (Refactored)] Phone was lost/discarded, status reset to 0
+[Dynamic Financial System (Refactored)] Bank letter read - directly giving phone to player
+[Dynamic Financial System (Refactored)] Phone given to player, status set to 1
+  3. 起床后查看日志，确认无报错
+（2）[Dynamic Financial System (Refactored)] Removed phone from shipping bin (phones are not sellable)
+[Dynamic Financial System (Refactored)] Removed phone from shipping bin (phones are not sellable)
+[Dynamic Financial System (Refactored)] Removed phone from shipping bin (phones are not sellable)
+[Dynamic Financial System (Refactored)] Removed phone from shipping bin (phones are not sellable)
+[Dynamic Financial System (Refactored)] Removed phone from shipping bin (phones are not sellable)
+[Dynamic Financial System (Refactored)] Removed phone from shipping bin (phones are not sellable)
+[Dynamic Financial System (Refactored)] Removed phone from shipping bin (phones are not sellable)
+[Dynamic Financial System (Refactored)] Removed phone from shipping bin (phones are not sellable)
+[Dynamic Financial System (Refactored)] Removed phone from shipping bin (phones are not sellable)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 1 items found
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +75 (cumulative=75)
+[Dynamic Financial System (Refactored)] New day started
+[Dynamic Financial System (Refactored)] New dynamic company: 土豆公司 (crop: Potato, R=15.33%)
+[Dynamic Financial System (Refactored)] Showing bank choice dialog
+
+//现象：土豆公司生成
+  4. 再次获取 30 个土豆并出售，睡觉
+
+（2）
+Dynamic Financial System (Refactored)] Player entered Farm - sending bank letter
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 1 items found
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +30 (cumulative=105)
+[Dynamic Financial System (Refactored)] New day started
+
+
+
+
+验证：
+  - 打开存档文件（%appdata%\StardewValley\Saves\<你的存档名>_<数字>\）
+  - 搜索 "CropShipments"
+  - 应看到：{"CropCode":"Potato","CumulativeSellCount":60,"LastSellDay":<天数>,"ConsecutiveSellDays":2}
+
+测试搜索结果如下：（2）
+<string>{"CompanyAccounts":[{"CompanyName":"Joja超市","DepositBalance":0,"BaseAmount":0,"AccumulatedInterest":912},{"CompanyName":"皮埃尔的杂货店","DepositBalance":0,"BaseAmount":0,"AccumulatedInterest":0}],"Loans":[],"CropShipments":[{"CropCode":"Potato","CumulativeSellCount":75,"LastSellDay":19,"ConsecutiveSellDays":0}],"DynamicCompanies":[],"DynamicCompaniesSpawnedThisSeason":0,"SpawnCounterSeason":"spring","LoanPrincipal":0,"AccumulatedInterest":0}</string></value></item></CustomData><mine_permanentMineChanges /><mine_lowestLevelReached>0</mine_lowestLevelReached><weatherForTomorrow>Sun</weatherForTomorrow><whichFarm>0</whichFarm><mine_lowestLevelReachedForOrder>-1</mine_lowestLevelReachedForOrder><skullCavesDifficulty>0</skullCavesDifficulty><minesDifficulty>0</minesDifficulty><currentGemBirdIndex>0</currentGemBirdIndex><junimoKartLeaderboards><entries /><maxEntries><int>10</int></maxEntries></junimoKartLeaderboards><specialOrders /><availableSpecialOrders><SpecialOrder><preSelectedItems /><selectedRandomElements /><objectives xsi:type="CollectObjective"><currentCount>0</currentCount><maxCount>25</maxCount><description>[Pierre_Objective_0_Text]</description><failOnCompletion>false</failOnCompletion><acceptableContextTagSets>!forage_item, category_vegetable, quality_gold</acceptableContextTagSets></objectives><objectives xsi:type="DonateObjective"><currentCount>0</currentCount><maxCount>25</maxCount><description>[Pierre_Objective_1_Text]</description><failOnCompletion>false</failOnCompletion><dropBox>PierreBox</dropBox><dropBoxGameLocation>SeedShop</dropBoxGameLocation><dropBoxTileLocation><X>18.5</X><Y>27</Y></dropBoxTileLocation><acceptableContextTagSets>!forage_item, category_vegetable, quality_gold</acceptableContextTagSets><minimumCapacity>-1</minimumCapacity><confirmed>false</confirmed></objectives><generationSeed>1576786896</generationSeed><seenParticipantsIDs /><participantsIDs /><unclaimedRewardsIDs /><appliedSpecialRules>false</appliedSpecialRules><rewards xsi:type="MoneyReward"><amount><int>2500</int></amount><multiplier><float>1</float></multiplier></rewards><rewards xsi:type="MailReward"><noLetter><boolean>true</boolean></noLetter><grantedMails><string>═══════════════════════════════════════════════════════════════════
+测试二：连续售卖天数追踪
+═══════════════════════════════════════════════════════════════════
+
+目标：验证连续卖 N 天正确累加，中断一天后归零。
+
+步骤：
+  1. 第1天：player_add (O)Potato 5 → 出货 → 睡觉
+（2）
+[Dynamic Financial System (Refactored)] Player entered Farm - sending bank letter
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 5 items found
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=106)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=107)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=108)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=109)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=110)
+[Dynamic Financial System (Refactored)] New day started
+//现象：燃料无变化，为16.8，新手保护期减少正常
+  2. 第2天：player_add (O)Potato 5 → 出货 → 睡觉
+（2）
+[Dynamic Financial System (Refactored)] Player entered Farm - sending bank letter
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 5 items found
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=111)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=112)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=113)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=114)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=115)
+[Dynamic Financial System (Refactored)] New day started
+  3. 第3天：player_add (O)Potato 5 → 出货 → 睡觉
+（2）
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 5 items found
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=116)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=117)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=118)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=119)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=120)
+//检测存档：
+<string>{"CompanyAccounts":[{"CompanyName":"Joja超市","DepositBalance":0,"BaseAmount":0,"AccumulatedInterest":912},{"CompanyName":"皮埃尔的杂货店","DepositBalance":0,"BaseAmount":0,"AccumulatedInterest":0}],"Loans":[],"CropShipments":[{"CropCode":"Potato","CumulativeSellCount":115,"LastSellDay":22,"ConsecutiveSellDays":3}],"DynamicCompanies":[{"CompanyName":"土豆公司","CropCode":"Potato","GenerationDay":20,"ProtectionEndDay":34,"Status":"New","DepositLimit":500000,"LoanLimit":80000,"FuelStock":168,"BankruptcySeason":null,"BankruptcyYear":0}],"DynamicCompaniesSpawnedThisSeason":1,"SpawnCounterSeason":"spring","LoanPrincipal":0,"AccumulatedInterest":0}</string></value></item></CustomData><mine_permanentMineChanges /><mine_lowestLevelReached>0</mine_lowestLevelReached><weatherForTomorrow>Festival</weatherForTomorrow><whichFarm>0</whichFarm><mine_lowestLevelReachedForOrder>-1</mine_lowestLevelReachedForOrder><skullCavesDifficulty>0</skullCavesDifficulty><minesDifficulty>0</minesDifficulty><currentGemBirdIndex>0</currentGemBirdIndex><junimoKartLeaderboards><entries /><maxEntries><int>10</int></maxEntries></junimoKartLeaderboards><specialOrders /><availableSpecialOrders><SpecialOrder><preSelectedItems /><selectedRandomElements /><objectives xsi:type="CollectObjective"><currentCount>0</currentCount><maxCount>80</maxCount><description>[Robin_Objective_0_Text]</description><failOnCompletion>false</failOnCompletion><acceptableContextTagSets>item_hardwood</acceptableContextTagSets></objectives><objectives xsi:type="DonateObjective"><currentCount>0</currentCount><maxCount>80</maxCount><description>[Robin_Objective_1_Text]</description><failOnCompletion>false</failOnCompletion><dropBox>RobinWood</dropBox><dropBoxGameLocation>ScienceHouse</dropBoxGameLocation><dropBoxTileLocation><X>10.5</X><Y>18</Y></dropBoxTileLocation><acceptableContextTagSets>item_hardwood</acceptableContextTagSets><minimumCapacity>-1</minimumCapacity><confirmed>false</confirmed></objectives><generationSeed>728364364</generationSeed><seenParticipantsIDs /><participantsIDs /><unclaimedRewardsIDs /><appliedSpecialRules>false</appliedSpecialRules><rewards xsi:type="MoneyReward"><amount><int>2000</int></amount><multiplier><float>1</float></multiplier></rewards><rewards xsi:type="MailReward"><noLetter><boolean>true</boolean></noLetter><grantedMails><string>
+//检测存档：
+
+  4. 第4天：什么都不卖，直接睡觉
+
+（2）
+<string>"1"</string></value></item><item><key><string>smapi/mod-data/bankmod.dynamicfinancialsystem.refactored/bankmod_account_data</string></key><value><string>{"CompanyAccounts":[{"CompanyName":"Joja超市","DepositBalance":0,"BaseAmount":0,"AccumulatedInterest":912},{"CompanyName":"皮埃尔的杂货店","DepositBalance":0,"BaseAmount":0,"AccumulatedInterest":0}],"Loans":[],"CropShipments":[{"CropCode":"Potato","CumulativeSellCount":120,"LastSellDay":23,"ConsecutiveSellDays":4}],"DynamicCompanies":[{"CompanyName":"土豆公司","CropCode":"Potato","GenerationDay":20,"ProtectionEndDay":34,"Status":"New","DepositLimit":500000,"LoanLimit":80000,"FuelStock":168,"BankruptcySeason":null,"BankruptcyYear":0}],"DynamicCompaniesSpawnedThisSeason":1,"SpawnCounterSeason":"spring","LoanPrincipal":0,"AccumulatedInterest":0}</string></value></item></CustomData><mine_permanentMineChanges /><mine_lowestLevelReached>0</mine_lowestLevelReached><weatherForTomorrow>Wind</weatherForTomorrow><whichFarm>0</whichFarm><mine_lowestLevelReachedForOrder>-1</mine_lowestLevelReachedForOrder><skullCavesDifficulty>0</skullCavesDifficulty><minesDifficulty>0</minesDifficulty><currentGemBirdIndex>0</currentGemBirdIndex><junimoKartLeaderboards><entries /><maxEntries><int>10</int></maxEntries></junimoKartLeaderboards><specialOrders /><availableSpecialOrders><SpecialOrder><preSelectedItems /><selectedRandomElements /><objectives xsi:type="CollectObjective"><currentCount>0</currentCount><maxCount>80</maxCount><description>[Robin_Objective_0_Text]</description><failOnCompletion>false</failOnCompletion><acceptableContextTagSets>item_hardwood</acceptableContextTagSets></objectives><objectives xsi:type="DonateObjective"><currentCount>0</currentCount><maxCount>80</maxCount><description>[Robin_Objective_1_Text]</description><failOnCompletion>false</failOnCompletion><dropBox>RobinWood</dropBox><dropBoxGameLocation>ScienceHouse</dropBoxGameLocation><dropBoxTileLocation><X>10.5</X><Y>18</Y></dropBoxTileLocation><acceptableContextTagSets>item_hardwood</acceptableContextTagSets><minimumCapacity>-1</minimumCapacity><confirmed>false</confirmed></objectives><generationSeed>728364364</generationSeed><seenParticipantsIDs /><participantsIDs /><unclaimedRewardsIDs /><appliedSpecialRules>false</appliedSpecialRules><rewards xsi:type="MoneyReward"><amount><int>2000</int></amount><multiplier><float>1</float></multiplier></rewards><rewards xsi:type="MailReward"><noLetter><boolean>true</boolean></noLetter><grantedMails><string>
+
+//燃料库存无变化
+
+
+验证：
+  - 第3天睡觉后，存档中 Potato 的 ConsecutiveSellDays = 3
+  - 第4天睡觉后，存档中 Potato 的 ConsecutiveSellDays = 0
+
+未查询到ConsecutiveSellDays，因为动态公司未生成，无法完成后续测试
+
+═══════════════════════════════════════════════════════════════════
+测试三：触发公司生成（土豆公司）
+═══════════════════════════════════════════════════════════════════
+
+目标：累计卖够阈值后，自动生成动态公司。
+
+阈值默认 50，可在 GMCM 调低（建议测试时改为 10）。
+
+步骤 A —— GMCM 降阈值（可选）：
+  1. 进游戏 → 按 P 打开菜单 → 找到 Mod 配置
+  2. 将"生成所需累计出售数量"改为 10
+  3. 保存
+
+步骤 B —— 触发生成：
+  1. 确保之前已卖过至少 10 个土豆（测试一已卖过就跳过）
+     player_add (O)Potato 15//player_add (O)192 15
+     扔进出货箱 → 睡觉
+world_setday
+world_settime 0900
+  2. 起床后应该看到聊天栏弹出：
+     "新公司诞生：土豆公司！（土豆累计出售15个）"
+
+  3. 打开手机 → 应该看到第三个标签页："土豆公司"
+     状态显示：[新公司·保护期剩余 14 天]
+
+[Dynamic Financial System (Refactored)] Player entered Farm - sending bank letter
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 10 items found
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=1)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=2)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=3)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=4)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=5)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=6)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=7)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=8)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=9)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Potato: +1 (cumulative=10)
+[Dynamic Financial System (Refactored)] New day started
+[Dynamic Financial System (Refactored)] New dynamic company: 土豆公司 (crop: Potato, R=15.33%)
+
+//测试证明合格，土豆公司诞生
+验证：
+  - SMAPI 日志：New dynamic company: 土豆公司
+  - UI 标签栏多了"土豆公司"
+
+
+═══════════════════════════════════════════════════════════════════
+测试四：动态公司存款/取款
+═══════════════════════════════════════════════════════════════════
+
+目标：动态公司的存钱/取钱功能与固定公司一致。
+
+步骤：
+  1. 打开手机 → 点击"土豆公司"标签
+  2. 应该有足够的现金（控制台加钱）：
+     player_add money 50000
+//代码应该是player_setmoney 50000
+
+  3. 点击"存入" → 输入 10000 → 确认
+  4. 看到"成功存入 10,000 g！"
+  5. 点击"取出" → 输入 3000 → 确认
+  6. 看到"成功取出 3,000 g！"
+
+验证：
+  - UI 显示存款余额正确变化
+  - 身上金币正确增减
+
+//测试结果：并无异常，但是每次行为都会回到joja超市界面，不方便测试
+
+═══════════════════════════════════════════════════════════════════
+测试五：燃料库存
+═══════════════════════════════════════════════════════════════════
+
+目标：出货土豆会增加对应公司燃料，UI 显示正确。
+
+步骤：
+  1. 打开手机 → 切到土豆公司，记下当前燃料库存显示值
+  2. 获取土豆并出货：
+     player_add (O)Potato 10
+     扔进出货箱 → 睡觉
+
+  3. 起床后打开手机 → 土豆公司
+     燃料库存应增加 +10 FP = +1.0 标准作物当量
+
+  4. 测试铱星品质加成：
+     player_add (O)Potato 5 4    （注：品质码4=铱星）
+     出货 → 睡觉
+     燃料应额外增加 5×10 + 5×10 = +100 FP = +10.0 当量
+
+验证：
+  - UI 中"燃料库存"数值逐天变化
+  - 正常每天消耗 DBase × statusCoefficient × 10 FP
+    （土豆 DBase=9.3，新公司/稳定系数=0.8，日消耗≈74 FP = 7.4 当量）
+
+//测试结果：燃料变化，并导致公司倒闭，合理
+═══════════════════════════════════════════════════════════════════
+测试六：咖啡豆排除
+═══════════════════════════════════════════════════════════════════
+
+目标：卖咖啡豆不会生成公司。
+
+步骤：
+  1. player_add (O)433 60   （咖啡豆 ItemId=433）
+
+  2. 扔进出货箱 → 睡觉
+
+验证：
+  - 不会弹出"新公司诞生"
+  - 存档中 DynamicCompanies 不包含咖啡豆相关条目
+  - SMAPI 日志无咖啡豆公司生成记录
+//测试合理
+═══════════════════════════════════════════════════════════════════
+测试七：公司席位限制
+═══════════════════════════════════════════════════════════════════
+
+目标：最多 4 家动态公司，当前季节最多生成 2 家。
+
+步骤：
+  1. GMCM 将阈值降到 10
+
+  2. 依次出售不同作物各 15 个：
+     player_add (O)Potato 15
+     player_add (O)Strawberry 15
+     player_add (O)Blueberry 15
+     player_add (O)Hops 15
+     player_add (O)Hot Pepper 15
+     player_add (O)Tomato 15
+//player_add (O)192 15
+//player_add (O)258 15
+//player_add (O)304 15
+//player_add (O)260 15
+//player_add (O)256 15
+     全部扔进出货箱 → 睡觉
+
+  3. 起床后看聊天栏
+
+验证：
+  - 本季最多弹出 2 次"新公司诞生"
+  - 手机标签页最多 2（固定）+ 2（本季新增）= 4 个
+  - 到下个季节，可以再生成 2 家
+//[Dynamic Financial System (Refactored)] Player entered Farm - sending bank letter
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Scanning shipping bin: 4 items found
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Tomato: +16 (cumulative=16)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Hot Pepper: +15 (cumulative=15)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Hops: +15 (cumulative=15)
+[Dynamic Financial System (Refactored)] [ShipmentTracking] Blueberry: +15 (cumulative=15)
+[Dynamic Financial System (Refactored)] New day started
+[Dynamic Financial System (Refactored)] New dynamic company: 番茄公司 (crop: Tomato, R=25.00%)
+[Dynamic Financial System (Refactored)] 土豆公司: 利息 2090 g (有效利率 18.434%/天)
+//测试通过，后续由于燃料问题，无法继续测试
+═══════════════════════════════════════════════════════════════════
+测试八：资产池取款限制（模拟）
+═══════════════════════════════════════════════════════════════════
+
+目标：饥饿期/濒死期公司取款受资产池限制。
+
+前提：需要一家燃料不足的动态公司（饥饿期：满足率 30-80%）
+
+步骤（快速触发饥饿期）：
+  1. 让土豆公司生成后，连续多天不出货土豆
+  2. 每天只睡觉，不卖土豆
+  3. 等待状态从 [稳定运营] 变为 [燃料不足·饥饿]
+     （约 3-5 天不出货后触发）
+
+  4. 饥饿状态下，尝试大量取款
+
+验证：
+  - 如果"资产池不足"，取款被拒绝
+  - 错误提示："资产池不足！当前最多可取 X g。"（X < 原存款余额）
+
+//测试合理，80000只能取出48000
+═══════════════════════════════════════════════════════════════════
+快速测试指令备忘（Stardew 1.6 语法）
+═══════════════════════════════════════════════════════════════════
+
+| 指令 | 作用 |
+|------|------|
+| player_add (O)192 30 | 获取 30 个土豆 |
+| player_add (O)400 30 | 获取 30 个草莓 |
+| player_add (O)258 30 | 获取 30 个蓝莓 |
+| player_add (O)304 30 | 获取 30 个啤酒花 |
+| player_add (O)260 30 | 获取 30 个辣椒 |
+| player_add (O)256 30 | 获取 30 个番茄 |
+| player_add (O)433 60 | 获取 60 个咖啡豆 |
+| player_add money 100000 | 加 10 万金币 |
+| spawn_phone | 重新获取手机 |
+| reset_phone_flag | 重置手机标记位 |
+
+═══════════════════════════════════════════════════════════════════
+Bug 修复记录 (2026-05-03)
+═══════════════════════════════════════════════════════════════════
+
+Bug 1: 出货数据不记录 (CropShipments 始终为空)
+  原因: NormalizeItemId() 用 obj.ItemId 解析作物代码，但 1.6 的 ItemId 是
+        纯数字 "192"，不含 (O) 前缀，导致 CropDataProvider 查找失败。
+  修复: 改用 obj.Name 获取内部名称 "Potato"，与 CropDataProvider 匹配。
+  文件: Services/Core/ShipmentTrackingService.cs
+
+Bug 2: 手机可被出货箱出售，触发丢失→补发→售出循环
+  原因: 手机未标记为不可出售。
+  修复: OnDayEnding 中扫描出货箱，移除手机物品。
+        日志提示: "Removed phone from shipping bin (phones are not sellable)"
+  文件: BankMod.cs
+
+═══════════════════════════════════════════════════════════════════
+建议测试顺序
+═══════════════════════════════════════════════════════════════════
+
+  1. GMCM 调低阈值到 10（方便快速触发）
+  2. 测试一 → 验证出货跟踪
+  3. 测试二 → 验证连续天数
+  4. 测试三 → 验证公司生成
+  5. 测试四 → 验证存款取款
+  6. 测试五 → 验证燃料变化
+  7. 测试六 → 验证咖啡豆排除
+  8. 测试七 → 验证席位限制

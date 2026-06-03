@@ -1,0 +1,459 @@
+好的，以下是 V3.3 补丁按文件拆解的增量引入指南，明确每个阶段该引入哪些内容，避免一次堆叠导致认知负担。
+
+---
+
+V3.3 补丁分阶段融合指南
+
+核心原则：联机改造是横切关注点，从阶段一就需要埋点；燃料改造只影响阶段六之后。每个阶段只加与该阶段相关的约束，不提前加后续阶段的逻辑。
+
+---
+
+一、对 demand.txt 的增量
+
+阶段一：基础框架与手机道具（新增联机埋点）
+
+在现有 1.1-1.5 之后，追加以下步骤：
+
+步骤 1.6：联机基础架构埋点
+
+· 在 ModEntry.cs 的 Entry() 方法中注册两个事件：
+  · helper.Events.Multiplayer.PeerConnected += OnPeerConnected;
+  · helper.Events.Multiplayer.ModMessageReceived += OnModMessageReceived;
+· OnPeerConnected 暂时留空（仅日志输出）
+· OnModMessageReceived 暂时留空（仅日志输出）
+· 定义消息类型常量字符串："ConfigSync", "BankOperation", "BankDataSync", "BankSnapshot"
+· 测试：进入多人游戏，确认日志输出“客户端已连接”
+
+步骤 1.7：手机多端同步检测
+
+· 手机检测逻辑 OnDayStarted 中加入 if (!Context.IsMainPlayer) return;
+· 手机状态通过 BankDataSync 消息同步（当前阶段可先不做，仅加注释标记 TODO）
+· 测试：主机正常获取手机，客机日志显示“跳过手机检测（非主机）”
+
+---
+
+阶段三：固定公司存款功能（新增操作鉴权埋点）
+
+在现有 3.1-3.4 之后，追加：
+
+步骤 3.5：联机存款操作鉴权（仅埋点）
+
+· 在 BankMenu.cs 的存款/取款按钮点击逻辑中，增加判断：
+  ```csharp
+  if (!Context.IsMainPlayer)
+  {
+      // 客机：发送 BankOperationRequest 消息给主机
+      // 主机：直接执行
+  }
+  ```
+· 当前阶段客机分支可先 return 并日志提示“多人模式功能开发中”
+· 测试：客机点击存款按钮，确认日志输出且不崩溃
+
+---
+
+阶段六：动态公司——诞生与基础运营（新增燃料逻辑+联机操作）
+
+在现有 6.3-6.4 之后，追加：
+
+步骤 6.5：燃料系统接口定义
+
+· 新增 Services.Abstractions/IFuelService.cs
+· 方法签名见 V3.3 补丁 §3.5（包含 RecordShippingBinSale, RecordExternalPurchase, RecordExternalSale, GetDisplayFuelStock）
+· 新增 FuelConstants 静态类（FuelPointsPerCrop = 10 等常量）
+· 测试：编译通过，接口可被引用
+
+步骤 6.6：燃料系统基础实现
+
+· 新增 Services.Core/FuelService.cs，实现 IFuelService
+· 内部所有库存使用 int（燃料点 FP），UI 展示层除以 10
+· 实现：
+  · RecordShippingBinSale：stock += quantity * 10（铱星额外 +10，金星额外 +5）
+  · RecordExternalPurchase：stock -= quantity * 5
+  · RecordExternalSale：stock -= quantity * 5
+· 阈值公式中的 Y 也转换为 FP（Y × 10）
+· 测试：单元测试验证买卖不对称性（买1个 -5FP，出货1个 +10FP）
+
+步骤 6.7：公司生成时注入初始燃料库存
+
+· 新公司生成时调用 IFuelService.AddFuelStock(companyId, initialFuelPoints)
+· initialFuelPoints = Smax × 0.3（与 V3.2 补丁一 §1.5 一致，仅内部单位改为 FP）
+· 测试：新公司生成后，手机 UI 显示库存 > 0
+
+---
+
+阶段十三：多人模式（新增联机完整实现）
+
+将原 13.1-13.2 替换为以下内容：
+
+步骤 13.1：主机配置同步
+
+· 实现 OnPeerConnected：主机序列化 ModConfig，通过 SendMessage 发送 "ConfigSync" 消息
+· 实现客机端 OnModMessageReceived 接收 "ConfigSync"，覆盖本地配置
+· 测试：主机修改利率后，客机加入后 UI 显示主机配置
+
+步骤 13.2：客机金融操作消息协议
+
+· 实现 BankOperationRequest 和 BankDataSync 消息类（标记 [Serializable]）
+· 客机存款/取款改为发送 "BankOperation" 消息
+· 主机接收后鉴权、执行、广播 "BankDataSync"
+· 主机端加入操作锁 Dictionary<long, bool> 防止并发
+· 测试：客机存款 100g，主机和客机 UI 均显示余额增加
+
+步骤 13.3：日结算全量快照同步
+
+· 主机 OnDayStarted 结算完成后，构造 BankSnapshot 消息广播全体
+· BankSnapshot 包含：所有公司利率、状态、各玩家自己的余额（不泄露他人隐私）
+· 客机接收后刷新 UI
+· 测试：主机睡觉后，客机 UI 自动更新利息收入
+
+步骤 13.4：联机转账（原 13.1-13.2 逻辑）
+
+· 在手机 UI 中添加“转账”标签
+· 列出在线其他玩家
+· 转账操作同样走消息协议（发送方 → 主机 → 接收方）
+· 测试：两人在线时转账，双方余额正确
+
+---
+
+阶段十四：全局配置整合
+
+在现有 14.1 中追加以下配置项分组：
+
+多人模式（V3.3）：
+
+参数 推荐值 说明
+客机操作超时（秒） 5 客机等待主机确认的最长时间
+
+燃料数值（V3.3）：
+
+参数 推荐值 说明
+燃料点倍数 10 1 个标准作物 = 10 FP
+出货箱基础加成 10 FP/个 
+铱星额外加成 10 FP/个 总计 20 FP
+金星额外加成 5 FP/个 总计 15 FP
+购买对家打压值 5 FP/个 不设配置，固定为出货加成的一半
+商店卖出打压值 5 FP/个 与购买打压等值
+
+---
+
+二、对 索引.docx 的增量
+
+阶段一（新增行）
+
+在“阶段一”表格末尾追加：
+
+查什么 去哪里看
+联机主/客机判断 架构总.docx → V3.3 补丁 §1.2（Context.IsMainPlayer）
+联机消息类型定义 架构总.docx → V3.3 补丁 §1.4
+OnDayStarted 客机跳过 架构总.docx → V3.3 补丁 §1.5
+
+阶段六（新增行）
+
+在“阶段六”表格中追加：
+
+查什么 去哪里看
+燃料系统接口 架构总.docx → V3.3 补丁 §3.5 IFuelService
+燃料常量 架构总.docx → V3.3 补丁 §3.5 FuelConstants
+燃料库存内部单位 架构总.docx → V3.3 补丁 §3.2（1 标准作物 = 10 FP）
+燃料变动规则 架构总.docx → V3.3 补丁 §3.3（出货+10FP，购买-5FP）
+燃料阈值 FP 换算 架构总.docx → V3.3 补丁 §3.6
+
+阶段十三（原行替换）
+
+将“阶段十三”整个替换为：
+
+查什么 去哪里看
+联机架构完整约束 架构总.docx → V3.3 补丁 §1（主机权威）+ §2（数据一致性）
+客机操作消息协议 架构总.docx → V3.3 补丁 §1.4（BankOperationRequest / BankDataSync）
+操作锁机制 架构总.docx → V3.3 补丁 §2.2
+客机功能白名单 架构总.docx → V3.3 补丁 §2.3
+日结算快照同步 架构总.docx → V3.3 补丁 §1.5
+
+全局日结算流程（新增行）
+
+在现有“全局日结算流程”表格末尾追加：
+
+顺序 操作 对应接口/模块
+12a 【V3.3】主机广播全量快照给客机 BankSnapshot 消息
+12b 【V3.3】客机接收快照后刷新 UI OnModMessageReceived
+
+---
+
+三、对 value2.docx 的增量
+
+§8 公司燃料机制（追加 8.4 节）
+
+在现有 8.3 之后追加：
+
+8.4 燃料点（FP）与非对称套利规则【V3.3 新增】
+
+燃料库存内部以“燃料点（Fuel Point, FP）”为单位计算，1 个标准作物 = 10 FP。
+
+操作 燃料变动（FP） 说明
+出货箱卖出 1 个对应作物 +10 FP 标准回补
+出货箱卖出 1 个铱星作物 +20 FP 高品质加成（额外 +10）
+出货箱卖出 1 个金星作物 +15 FP 中品质加成（额外 +5）
+在皮埃尔/Joja 购买 1 个对应作物 -5 FP 打压（为对家提供渠道）
+在皮埃尔/Joja 卖出 1 个对应作物 -5 FP 与购买打压等值
+
+套利机制：买 10 个土豆（-50 FP）→ 卖 5 个出货（+50 FP）→ 净库存不变，手持 5 个可应对未来危机。打压扣除量（50%）小于回补量，创造囤货空间。
+
+UI 展示：内部 FP ÷ 10 后显示为 1 位小数（个当量）。
+
+---
+
+四、对 架构总3.0.docx 的增量
+
+追加新节：V3.3 增量补丁
+
+在文档末尾（V3.2 补丁之后）追加完整的 V3.3 补丁内容（即上一轮生成的独立补丁文件），包含：
+
+· 补丁一：联机模式主机权威机制（§1.1-1.5）
+· 补丁二：联机数据一致性保障机制（§2.1-2.4）
+· 补丁三：燃料值内部整数化与非对称套利规则（§3.1-3.7）
+· 配置参数更新：§10.11 联机参数、§10.12 燃料数值参数
+· 代码审查清单更新：新增 8 条致命/高/中校验项
+
+修改 §7 项目结构定稿
+
+在项目结构中新增：
+
+```
+Messages/
+├── BankOperationRequest.cs      // V3.3 新增
+└── BankDataSync.cs              // V3.3 新增
+```
+
+修改 §9.8 IFuelService 定义
+
+更新 IFuelService 接口定义，增加 RecordShippingBinSale, RecordExternalPurchase, RecordExternalSale, GetDisplayFuelStock 四个方法签名。
+
+---
+
+五、对 value.txt 的处理
+
+不修改。value.txt 是 V1.0 早期设计，已被 V3.0 裁决为“仅参考”。V3.3 的所有增量均以 value2.docx 和 架构总 为准。
+
+---
+
+六、阶段与文档对应速查表（供 AI 调度）
+
+开发阶段 需查阅的架构文档 新增/修改的代码文件 关键约束
+阶段一 架构总 V3.1 §7 + V3.3 §1.2/1.5 ModEntry.cs（事件注册+客机判断） 联机埋点，客机 OnDayStarted 跳过
+阶段三 架构总 V3.1 §3.1/§9.2 + V3.3 §1.4 BankMenu.cs（操作分支判断） 操作鉴权埋点
+阶段四 架构总 V3.1 §9.2 + value2 §1.1 Interest 接口实现 CalculateDepositRate 预留 CompanyStatus 参数
+阶段六 架构总 V3.2 §补丁一 + V3.3 §3 IFuelService.cs, FuelService.cs, CompanyManager.cs 燃料 FP 整数化，买卖不对称
+阶段十三 架构总 V3.3 §1/§2 ModEntry.cs, Messages/*, BankMenu.cs 主机仲裁+消息协议+操作锁
+
+---
+
+
+
+勘误六：联机财产分配与存款分割机制
+
+问题来源：
+原版星露谷在刘易斯家中的“财产分配”功能，会将联机存档中的共同现金按玩家数量分割为个人独立现金。如果我们的银行存款不跟随分割，就会出现两个问题：
+
+1. 不分家时，存款按 ID 独立会让合作阶段的金融信息不透明，玩家无法共享账户信息进行协作。
+2. 分家后，如果银行存款继续保持“共同状态”，会导致资金归属混乱。
+
+修正方案：
+
+1. 不分家时的存款模式：共同账户
+
+当 Game1.player.team.useSeparateWallets == false（未分家）时：
+
+· 所有玩家的银行存款是共同账户，大家看到同一个余额、同一套存款/贷款数据。
+· 任何玩家的存入/取款操作都直接影响共同账户。
+· UI 上不区分“谁的存款”，只显示“家庭存款”或“农场存款”。
+
+2. 分家时：存款按人数均分
+
+当玩家在刘易斯家完成财产分配时：
+
+· 原版游戏会将共同现金均分给每个玩家。
+· 我们的银行存款同步执行均分：将共同账户中的各项余额（存款本金、贷款本金、累计利息等）按在线玩家数量均分，写入各自的 modData 独立账户。
+· 分家完成后，存款变为独立账户，每个玩家只能看到和操作自己的存款。
+
+3. 分家后：存款独立账户
+
+当 useSeparateWallets == true（已分家）时：
+
+· 每个玩家的银行存款完全独立，按 playerId 隔离。
+· UI 只显示本玩家的存款数据。
+
+4. 代码实现要点
+
+```csharp
+// OnDayStarted 中检查分家状态变化
+private void OnDayStarted(object sender, DayStartedEventArgs e)
+{
+    if (!Context.IsMainPlayer) return;
+
+    bool wasSeparated = lastKnownSeparateWallets;
+    bool isSeparated = Game1.player.team.useSeparateWallets;
+
+    if (!wasSeparated && isSeparated)
+    {
+        // 刚完成分家，执行存款均分
+        SplitBankAccountsAmongPlayers();
+        // 广播新账户状态给所有客机
+        BroadcastBankSnapshot();
+    }
+
+    lastKnownSeparateWallets = isSeparated;
+    // ... 其余日结算逻辑
+}
+
+private void SplitBankAccountsAmongPlayers()
+{
+    int playerCount = Game1.getAllFarmers().Count(f => f.isActive());
+    if (playerCount <= 1) return;
+
+    // 对每个公司的共同存款执行均分
+    foreach (var company in GetAllCompanies())
+    {
+        var commonAccount = GetCommonAccount(company.Id);
+        int perPlayerDeposit = commonAccount.DepositBalance / playerCount;
+        int perPlayerLoan = commonAccount.LoanPrincipal / playerCount;
+        int perPlayerInterest = commonAccount.AccruedInterest / playerCount;
+
+        int depositRemainder = commonAccount.DepositBalance % playerCount;
+        int loanRemainder = commonAccount.LoanPrincipal % playerCount;
+        int interestRemainder = commonAccount.AccruedInterest % playerCount;
+
+        foreach (var farmer in Game1.getAllFarmers().Where(f => f.isActive()))
+        {
+            var personalAccount = GetOrCreatePersonalAccount(farmer.UniqueMultiplayerID, company.Id);
+            personalAccount.DepositBalance = perPlayerDeposit;
+            personalAccount.LoanPrincipal = perPlayerLoan;
+            personalAccount.AccruedInterest = perPlayerInterest;
+        }
+
+        // 余数归主机（或静默舍弃，推荐归主机以保证总金额守恒）
+        if (depositRemainder > 0 || loanRemainder > 0 || interestRemainder > 0)
+        {
+            var hostAccount = GetOrCreatePersonalAccount(Game1.MasterPlayer.UniqueMultiplayerID, company.Id);
+            hostAccount.DepositBalance += depositRemainder;
+            hostAccount.LoanPrincipal += loanRemainder;
+            hostAccount.AccruedInterest += interestRemainder;
+        }
+    }
+}
+```
+
+5. 新增约束
+
+约束 说明
+共同账户模式 useSeparateWallets == false 时，所有玩家共享同一套银行存款数据
+分家均分 useSeparateWallets 从 false 变 true 的当天，执行存款等额均分
+余数归主机 无法整除的余额归主机，保证总金额守恒（不凭空增减）
+分家后独立 分家后，每个玩家的 modData 独立存储，UI 只展示本玩家数据
+操作锁 分家当天（检测到状态变化时），所有金融操作按钮灰掉，直到日结算完成
+
+6. 反作弊说明
+
+· 分家前，任何玩家操作共同账户都是合法的（本来就是共同财产）。
+· 分家执行的代码在主机端运行，客机无权干预均分逻辑。
+· 分家结果通过 BankDataSync 广播给客机，客机 UI 同步更新为个人独立余额。
+
+
+
+贷款必须与存款一起平分，理由如下：
+
+---
+
+逻辑推导
+
+1. 财产分配的本质是“公平分割”：原版分家时，共同现金均分，意味着双方对共同财产享有平等权利。贷款作为共同债务，自然也应由双方平等承担。
+2. 如果不平分贷款，会出现三种坏情况：
+   方案 后果
+   贷款全部归主机 客机无债一身轻，主机可能因贷款超存款而立即破产
+   贷款全部归客机 客机可能直接破产，且主机可以“赖账”
+   自由选择 玩家会选择对自己最有利的分配，导致系统被滥用
+3. 平分的自洽性验证：
+   · 假设共同存款 100,000g，共同贷款 60,000g，两人分。
+   · 平分后：每人存款 50,000g，贷款 30,000g。
+   · 净资产：每人 50,000 - 30,000 = 20,000g（总净资产 40,000g = 原来的 100,000 - 60,000）。
+   · 借款上限：每人 20,000 × 200% = 40,000g，减去已有贷款 30,000g，剩余可借 10,000g。
+   · 不存在负数或越界。
+4. 如果贷款不跟随存款平分：
+   · 玩家A分到存款 50,000g，贷款 0g，净资产 50,000g。
+   · 玩家B分到存款 50,000g，贷款 60,000g，净资产 -10,000g → 借款上限 = 负数处理 → 直接破产风险。
+   · 这不是公平分配，是陷阱。
+
+---
+
+修正规则
+
+贷款跟随存款一起平分，没有自由选择模式。
+
+在勘误六的 SplitBankAccountsAmongPlayers 方法中，贷款和累计利息与存款一并纳入均分逻辑（之前的代码示例已经包含贷款和利息的均分，这里再次确认）。
+
+分家当天，贷款合同处理规则：
+
+1. 共同贷款在分家时按人数等额拆分，余数归主机。
+2. 拆分后的贷款，每人的还款周期、下次还款日保持不变（与原共同贷款一致）。
+3. 拆分后，每人独立负责自己的那份贷款，互不影响。
+4. 分家当天，所有贷款扣息和还款检测暂停一天（日结算已在分家前完成，分家后的次日才恢复）。
+
+---
+
+补充到勘误六的代码中
+
+在 SplitBankAccountsAmongPlayers 方法中，贷款拆分的逻辑需要加上还款日同步：
+
+```csharp
+private void SplitBankAccountsAmongPlayers()
+{
+    int playerCount = Game1.getAllFarmers().Count(f => f.isActive());
+    if (playerCount <= 1) return;
+
+    foreach (var company in GetAllCompanies())
+    {
+        var commonAccount = GetCommonAccount(company.Id);
+
+        // 保存原贷款合同信息
+        var originalDueDay = commonAccount.LoanDueDay;
+        var originalRepaymentPeriod = commonAccount.RepaymentPeriod;
+        var originalDailyRate = commonAccount.LoanDailyRate;
+
+        // 均分
+        int perPlayerDeposit = commonAccount.DepositBalance / playerCount;
+        int perPlayerLoan = commonAccount.LoanPrincipal / playerCount;
+        int perPlayerInterest = commonAccount.AccruedInterest / playerCount;
+
+        int depositRemainder = commonAccount.DepositBalance % playerCount;
+        int loanRemainder = commonAccount.LoanPrincipal % playerCount;
+        int interestRemainder = commonAccount.AccruedInterest % playerCount;
+
+        foreach (var farmer in Game1.getAllFarmers().Where(f => f.isActive()))
+        {
+            var personalAccount = GetOrCreatePersonalAccount(farmer.UniqueMultiplayerID, company.Id);
+            personalAccount.DepositBalance = perPlayerDeposit;
+            personalAccount.LoanPrincipal = perPlayerLoan;
+            personalAccount.AccruedInterest = perPlayerInterest;
+
+            // 继承原贷款合同条款
+            personalAccount.LoanDueDay = originalDueDay;
+            personalAccount.RepaymentPeriod = originalRepaymentPeriod;
+            personalAccount.LoanDailyRate = originalDailyRate;
+        }
+
+        // 余数归主机
+        var hostAccount = GetOrCreatePersonalAccount(Game1.MasterPlayer.UniqueMultiplayerID, company.Id);
+        hostAccount.DepositBalance += depositRemainder;
+        hostAccount.LoanPrincipal += loanRemainder;
+        hostAccount.AccruedInterest += interestRemainder;
+    }
+}
+```
+
+
+
+
+
+
+
+
+按此指南，每个阶段只引入该阶段需要的增量，后续阶段的逻辑仅以注释或接口预留形式存在，不会造成代码 AI 的认知混淆。

@@ -1,0 +1,50 @@
+// 献祭路线过场动画
+// 地点：废弃的 Joja 超市内部
+// 玩家被皮埃尔叫到这里
+
+/text 皮埃尔站在落满灰尘的 Joja 柜台后，手里举着一份发皱的文件，看到你进来，冲你招了招手。
+/pause 500
+/speak Pierre “嘿，你来得正好！快过来看看这个。”
+/pause 500
+/text 你走上前，皮埃尔把文件递到你面前。
+/pause 500
+/speak Pierre “鹈鹕镇电信服务计划书……我在 Joja 的旧档案柜里翻出来的。如果当年他们成功了，现在整个小镇的电话和网络都会被 Joja 控制。”
+/emote Pierre 12  // 忧虑
+/pause 500
+/speak Pierre “幸好你完成了献祭，把这一切都改变了。你是鹈鹕镇的英雄，真的。”
+/emote Pierre 20  // 感激
+/pause 500
+
+// 祝尼魔出现
+/text 忽然，一道金色的光芒从地板缝隙中渗出。
+/pause 300
+/cutscene spawnJunimo  // 一只祝尼魔从文件背后跳出来
+/emote Pierre 4  // 惊讶
+/pause 500
+/text 紧接着，第二只、第三只……越来越多的祝尼魔从货架、收银台、天花板冒了出来，围着你俩蹦蹦跳跳。
+/pause 800
+
+// 电话响起
+/text 皮埃尔的手机突然响了。他接起来，然后示意你靠近一起听。
+/pause 500
+/speak Phone “喂？皮埃尔吗？我是刘易斯！”
+/pause 300
+/speak Pierre “镇长？您怎么知道……”
+/speak Phone “哈哈，那些小精灵（祝尼魔）刚才跑遍了全镇，挨家挨户问大家有什么愿望。”
+/pause 500
+/speak Phone “结果你猜怎么着？它们决定帮忙实现一个——以后你在家就能买到所有商店的东西！”
+/emote Pierre 16  // 震惊
+/pause 500
+/speak Pierre “什么？这……这怎么可能？”
+/speak Phone “我也不知道具体咋回事，反正你打开手机看看就明白了。这是祝尼魔的魔法。”
+/pause 300
+/speak Phone “好了，我去通知其他人。先挂了！”
+/pause 300
+/text 电话挂断。皮埃尔低头看着自己的手机，又抬头看看你。
+/pause 500
+/speak Pierre “你听到了吧？打开你的手机看看——说不定已经多了什么新功能。”
+/emote Pierre 20  // 期待
+/pause 500
+/speak Pierre “去吧，试试看。如果真能用手机买东西……那可就太方便了。”
+/pause 500
+/end

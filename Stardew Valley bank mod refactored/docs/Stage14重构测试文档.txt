@@ -1,0 +1,140 @@
+Stage 14 SMAPI 合规重构 — 测试文档
+=====================================
+
+重构日期：2026-05-21
+重构范围：RouteService、EventScriptService、StoreHoursService 三层分离 + MailFlags 集中化
+
+
+一、架构变更摘要
+
+  新增文件（7个）：
+    Domain/MailFlags.cs                             集中化常量（事件ID/邮件标记/存档键）
+    Services/Abstractions/IRouteService.cs          路线检测接口
+    Services/Abstractions/IEventScriptService.cs    事件脚本构建接口
+    Services/Abstractions/IStoreHoursService.cs     商店营业时间接口
+    Services/Core/RouteService.cs                   路线检测实现（eventsSeen 为主）
+    Services/Core/EventScriptService.cs             事件脚本构建实现
+    Services/Core/StoreHoursService.cs              商店营业时间实现（Data/Shops + GameStateQuery）
+
+  修改文件（4个）：
+    BankMod.cs                                      删除 ~200 行（字段+方法），事件处理简化为服务调用
+    Services/Core/ModServices.cs                    新增 3 个服务属性 + 构造器初始化
+    UI/BankMenu.cs                                  删除硬编码 GetShopClosedReason，委托 StoreHoursService
+
+  SMAPI 合规改进：
+    - 路线检测：eventsSeen.Contains("191393"/"502261") 替代 Game1.CurrentEvent.id 猜测
+    - 商店营业：Data/Shops + GameStateQuery.CheckConditions 替代硬编码 switch/case
+    - 邮件标记：MailFlags 常量类集中管理，替代散落字符串
+    - 架构分层：EventScriptService/RouteService/StoreHoursService 独立于 Entry 类
+
+
+二、测试用例
+
+  T1. CC 旧存档 — 加载即应用路线效果
+    前置：使用已献祭完成的存档（ccIsComplete）
+    步骤：加载存档
+    预期：
+      - SMAPI 日志显示 "[Route] Detected Community Center route"
+      - SMAPI 日志显示 "[Route] CC effects: Joja renamed, Pierre ×2"
+      - BankMenu 中 Joja 公司名显示为 "皮埃尔子公司"
+      - 不会自动弹出过场动画（CC 仅限进入 AbandonedJojaMart 触发）
+[Dynamic Financial System] [Route] Detected Community Center route
+[Dynamic Financial System] [Route] CC effects: Joja renamed, Pierre ×2
+成功
+  T2. CC 旧存档 — 进入 AbandonedJojaMart 触发过场
+    前置：T1 通过，未进入过 AbandonedJojaMart
+    步骤：传送到 AbandonedJojaMart 或走过去
+    预期：
+      - 触发献祭过场动画（皮埃尔+电话+祝尼魔场景）
+      - 过场结束后弹出 "网购功能已解锁！"
+      - 手机银行界面显示 "网购" 按钮
+//通过
+  T3. CC 旧存档 — 电影院已建成
+    前置：使用已建成电影院的存档（ccMovieTheater）
+    步骤：加载存档
+    预期：
+      - SMAPI 日志显示 "[Stage14] CC old save: Movie Theater, skipping event"
+      - 直接解锁网购功能（不过场）
+      - 路线效果正常应用（改名 + 双倍打压上限）
+//通过
+  T4. Joja 旧存档 — 加载即触发
+    前置：使用已完成 Joja 路线的存档
+    步骤：加载存档
+    预期：
+      - SMAPI 日志显示 "[Route] Detected Joja route"
+      - SMAPI 日志显示 "[Route] Joja effects: Pierre renamed, Joja ×2"
+      - 短暂延迟后触发 Joja 过场（黑屏 + 纯文字）
+      - 过场结束后解锁网购
+//通过
+  T5. Joja 新存档 — 事件 502261 完成后触发
+    前置：Joja 路线未完成，所有项目即将完成
+    步骤：购买最后一个 Joja 开发项目，触发事件 502261
+    预期：
+      - 香草事件播放完毕后，自动触发 Joja 过场
+      - 过场结束后 Joja 公司改名 + Joja 打压上限 ×2
+      - 皮埃尔失去季节作物和柜台打压功能
+//通过
+  T6. CC 新存档 — 事件 191393 + 进入 AbandonedJojaMart
+    前置：CC 路线未完成
+    步骤：完成最后一个献祭包，触发事件 191393 → 后进入 AbandonedJojaMart
+    预期：
+      - 事件 191393 后路线效果已应用（改名 + Pierre 双倍）
+      - 进入 AbandonedJojaMart 后触发过场
+      - 过场结束后解锁网购
+//通过
+  T7. 网购 — 营业时间限制
+    前置：网购已解锁
+    步骤：在不同时间/日期点击 "网购" 按钮
+    预期：
+      - 周三/夏季26日：皮埃尔商店显示 [周三休息] 或 [夏季26日休息]
+      - 周四：铁匠铺显示 [周四休息]
+      - 非营业时间内点击 → "该商店未营业（原因）"
+      - 营业时间内 → 正常打开商店界面
+//通过
+  T8. 网购 — 公交/船只锁定
+    前置：网购已解锁，公交未修复，船只未修复
+    步骤：点击 "网购" → 选择沙漠/姜岛商店
+    预期：
+      - 沙漠商店显示 [公交未修复]
+      - 姜岛商店显示 [姜岛未解锁]
+      - 点击后弹 "该商店未营业"
+//通过
+  T9. CC 路线 — 皮埃尔打压上限翻倍
+    前置：T1 或 T6 通过（CC 路线完成）
+    步骤：去皮埃尔商店出售农产品
+    预期：
+      - 打压最大叠层为 6 层（原 3 层 ×2）
+      - SMAPI 日志中 effectiveMaxStacks=6
+//通过
+  T10. Joja 路线 — 皮埃尔失去功能
+    前置：T4 或 T5 通过（Joja 路线完成）
+    步骤：进入皮埃尔商店
+    预期：
+      - 仅显示 "购买商品" 按钮，无 "出售农产品" 选项
+      - 季节前3天不注入额外农产品
+//通过
+  T11. 路线效果存档独立
+    前置：T1 + T4 分别通过（两个不同存档）
+    步骤：先加载 CC 存档 → 再加载 Joja 存档
+    预期：
+      - CC 存档中公司名为 "皮埃尔子公司"
+      - Joja 存档中公司名为 "Joja子公司"（非 "皮埃尔子公司"）
+      - _originalCompanyNames 正确恢复
+//通过
+
+三、回归测试
+
+  RT1. 银行核心功能（存款/提款/借款/还款）正常
+  RT2. GMCM 配置菜单正常
+  RT3. 手机检测/补发逻辑正常
+  RT4. 电视 FBN 频道正常
+  RT5. 多人模式（如果有）正常
+
+
+四、SMAPI 日志关键词
+
+  测试时关注以下日志前缀：
+    [Route]       — 路线检测和效果应用
+    [EventScript] — 事件脚本构建和播放
+    [StoreHours]  — 商店营业时间数据加载
+    [Stage14]     — 旧存档/MovieTheater 等边界情况

@@ -1,0 +1,12 @@
+{
+  "Format": "1.28.0",
+  "Changes": [
+    {
+      "Action": "EditData",
+      "Target": "Data/Events/JojaMart",
+      "Entries": {
+       "BankMod.MorrisSampleBasket": "continue/27 7/farmer 27 7 1 Morris 22 7 1/pause 500/fade/viewport 26 7/pause 400/jump farmer/pause 800/faceDirection farmer 3/pause 300/speak Morris \"嘿！别碰那个周转箱，里面的样品弄乱了很麻烦。$2\"/pause 500/emote Morris 28/pause 300/speak Morris \"不过既然你在这儿……我听说最近镇上都在夸%farm农场的东西。$0#$b#说实话，皮埃尔那个老抠收你的菜给不了几个钱吧？$0\"/pause 500/speak Morris \"Joja讲究的是高效和实惠。$1#$b#如果你愿意把最好的当季作物稳定供给我，我可以按总部认可的流程给你一个长期收购价。$1\"/pause 300/speak Morris \"只要品质达标，价格绝对比隔壁那家杂货店更让你满意。$1#$b#你少跑腿，我补货，这才是双赢。$1\"/pause 500/speak Morris \"好好考虑一下。等你带第一批符合品控单的作物到柜台来，我们就可以正式敲定。$0#$b#现在我得回去看销售报表了……$0\"/end"
+      }
+    }
+  ]
+}
