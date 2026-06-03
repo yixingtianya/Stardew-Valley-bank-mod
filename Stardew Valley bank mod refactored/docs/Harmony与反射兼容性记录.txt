@@ -1,0 +1,192 @@
+# Harmony 补丁与反射调用兼容性记录
+# 更新日期：2026-06-03
+# 用途：记录本 mod 所有 Harmony 补丁和反射调用，便于与其他 mod 的兼容性排查
+
+
+一、Harmony 补丁清单
+
+  1.1 TVPatch — TV.checkForAction Prefix
+  ─────────────────────────────────────────
+    文件：      Patches/TVPatch.cs
+    目标：      StardewValley.TV.checkForAction
+    类型：      HarmonyPrefix + return false（跳过原方法）
+    命名空间：  bankmod.tv
+    功能：      注入 FBN 金融频道到电视选择菜单
+    频道构建：  BuildChannelList() 完整镜像原版频道（Weather/Fortune/Livin'/The/Fishing/Leave + FBN）
+    兼容性状态：✅ 已改造（2026-06-03）
+
+    已知兼容性：
+      - SVE（FlashShifter.SVECode）：不冲突 — SVE 未补丁 TV.checkForAction
+      - 其他电视 mod（如 Custom TV）：Prefix + return false 可能阻止其他 mod 的补丁执行
+      - Content Patcher 电视扩展：不冲突（CP 通过 JSON 注入，不使用 Harmony）
+
+    改造历史：
+      V1（原始）：Prefix 构建自定义频道列表，丢失了原版的 "???" 频道（Fall 26 诅咒事件）
+      V2（当前）：BuildChannelList() 完整复制原版所有频道 + FBN，保留 "???" 频道
+
+    游戏更新检查清单：
+      - TV.checkForAction 方法签名是否变化
+      - TV.selectChannel 方法是否变化
+      - 原版频道是否新增（需同步到 BuildChannelList）
+      - TV.currentChannel 字段名/类型是否变化
+      - TV.screen 字段名/类型是否变化
+
+
+  1.2 NpcDialoguePatch — NPC.checkAction Prefix
+  ─────────────────────────────────────────────
+    文件：      Patches/NpcDialoguePatch.cs
+    目标：      StardewValley.NPC.checkAction
+    类型：      HarmonyPrefix（不阻止原方法，通过 afterDialogues 回调追加）
+    命名空间：  bankmod.npcdialogue
+    功能：      欠债/破产/祝贺/NPC 对话注入
+    兼容性状态：✅ 低风险
+
+    已知兼容性：
+      - SVE：不冲突 — SVE 不补丁 NPC.checkAction
+      - NPC Dialogue Modifications 等对话 mod：使用 afterDialogues 追加，风险低
+      - 唯一风险：多个 mod 同时使用 afterDialogues 可能产生回调竞态
+
+    实现细节：
+      - 通过 DebtDialogueService 判断是否需要注入对话
+      - 使用 Game1.afterDialogues = () => { ... } 回调
+      - 原版 NPC 对话正常播放，BankMod 对话在回调中追加
+
+
+二、反射调用清单
+
+  2.1 LetterViewerMenu.mailMessage — 信件内容注入
+  ─────────────────────────────────────────────────
+    文件：      BankMod.cs（MenuChanged 事件处理）
+    目标类：    StardewValley.Menus.LetterViewerMenu
+    目标字段：  mailMessage（private List<string>）
+    反射方式：  System.Reflection（非 SMAPI ReflectionHelper）
+    功能：      在信件打开时将 Data/mail 缓存中的占位内容替换为真实信件文本
+    兼容性状态：✅ 已加固（2026-06-03）
+
+    已知兼容性：
+      - Content Patcher 信件扩展：不冲突 — CP 通过 Data/mail JSON 注入，不修改 LetterViewerMenu
+      - 其他 mod 反射同一字段：可能互相覆盖（已加 try-catch 防御）
+      - SVE 信件：不冲突 — SVE 通过 Data/mail 注入，不反射 LetterViewerMenu
+
+    加固内容（2026-06-03）：
+      1. try-catch 包裹反射操作，失败时记录日志而非崩溃
+      2. 类型检查：确认当前值是 List<string>
+      3. 字段不存在时日志提示 "game version may have changed"
+
+    游戏更新检查清单：
+      - LetterViewerMenu 类是否重命名或移除
+      - mailMessage 字段是否存在、类型是否仍为 List<string>
+      - mailMessage 的访问级别是否改变
+      - LetterViewerMenu 构造函数中 mailTitle 的赋值方式是否变化
+
+
+  2.2 NPC.isInvisible — Morris 可见性控制
+  ─────────────────────────────────────────
+    文件：      BankMod.cs（OnButtonPressed + OnUpdateTicked）
+    目标类：    StardewValley.NPC
+    目标字段：  isInvisible（private bool）
+    反射方式：  SMAPI Helper.Reflection.GetField<bool>()
+    功能：      Morris 过场动画前隐藏地图上的 Morris，动画结束后恢复
+    兼容性状态：✅ 已加固（2026-06-03）
+
+    已知兼容性：
+      - SVE（FlashShifter.SVECode）：⚠️ SVE 重写 Morris NPC 逻辑，反射可能不兼容
+        → 已加 SVE 检测，SVE 加载时跳过反射
+        → 降级行为：Morris 事件过场可能出现两个 Morris（不崩溃）
+      - 其他 Morris 相关 mod：未发现冲突
+
+    加固内容（2026-06-03）：
+      1. 新增 _sveLoaded 字段，Entry 中通过 ModRegistry.IsLoaded 检测
+      2. SVE 加载时跳过反射（隐藏和恢复两处均加守卫）
+      3. 非 SVE 环境行为完全不变
+
+    游戏更新检查清单：
+      - NPC.isInvisible 字段是否存在、类型是否仍为 bool
+      - NPC 类是否有公共的 SetInvisible 方法（可替代反射）
+      - Game1.currentLocation.characters 是否仍为可枚举列表
+
+
+  2.3 TV.currentChannel — 电视频道设置
+  ──────────────────────────────────────
+    文件：      Patches/TVPatch.cs（StartFbnChannel）
+    目标类：    StardewValley.Objects.TV
+    目标字段：  currentChannel（private int）
+    反射方式：  HarmonyLib AccessTools.Field
+    功能：      设置电视频道号为 FBN（7）
+    兼容性状态：✅ 低风险（已加 null 检查）
+
+    游戏更新检查清单：
+      - TV.currentChannel 字段名/类型是否变化
+
+
+  2.4 TV.screen — 电视屏幕精灵
+  ──────────────────────────────
+    文件：      Patches/TVPatch.cs（StartFbnChannel）
+    目标类：    StardewValley.Objects.TV
+    目标字段：  screen（private TemporaryAnimatedSprite）
+    反射方式：  HarmonyLib AccessTools.Field
+    功能：      设置电视屏幕显示 FBN 纹理动画
+    兼容性状态：✅ 低风险（已加 null 检查）
+
+    游戏更新检查清单：
+      - TV.screen 字段名/类型是否变化
+      - TemporaryAnimatedSprite 构造函数参数顺序是否变化
+
+
+  2.5 SafeDialogueBox.titleInPosition — GMCM 反射安全层
+  ──────────────────────────────────────────────────────
+    文件：      BankMod.cs（SafeDialogueBox 内联类）
+    目标：      防止 GMCM 每帧反射 DialogueBox 的 titleInPosition 字段崩溃
+    实现：      SafeDialogueBox : DialogueBox 子类 + public bool titleInPosition 字段
+    兼容性状态：✅ 低风险（仅在 SafeDialogueBox 作为 activeClickableMenu 时生效）
+
+    已知兼容性：
+      - GMCM（spacechase0.GenericModConfigMenu）：正是为此 mod 设计的兼容层
+      - SVE：不冲突 — SVE 不修改 DialogueBox
+
+
+三、SVE 兼容性专题
+
+  SVE 版本：1.15.11（源码审查日期：2026-06-03）
+  SVE UniqueID：FlashShifter.SVECode
+
+  SVE 的 Harmony 补丁（审查结论）：
+    - HarmonyPatch_PiggyBank：Postfix on SObject.checkForAction（不冲突）
+    - FurnitureCatalogue2Patch：Postfix on Furniture.checkForAction（不冲突）
+    - 其他补丁：Mountain/Desert/Bushes 等，均与 BankMod 无交集
+
+  SVE 对 TV 的处理：
+    - SVE 未补丁 TV.checkForAction
+    - SVE 通过 Content Patcher JSON 扩展内容，不使用 Harmony 修改电视
+
+  SVE 对 Morris 的处理：
+    - SVE 未控制 NPC.isInvisible
+    - SVE 的 Morris 引用仅在特殊订单和山地补丁中
+
+  BankMod 的 SVE 适配：
+    - _sveLoaded 检测：Helper.ModRegistry.IsLoaded("FlashShifter.SVECode")
+    - Morris 反射跳过：SVE 加载时不做 isInvisible 反射
+    - 降级行为：Morris 事件过场可能出现两个 Morris（不崩溃）
+
+
+四、与其他 mod 的潜在冲突速查表
+
+  ┌──────────────────────────┬────────────┬────────────────────────────────────┐
+  │ 冲突场景                  │ 风险等级   │ 说明                                │
+  ├──────────────────────────┼────────────┼────────────────────────────────────┤
+  │ 电视节目 mod（Custom TV） │ 中         │ Prefix+return false 可能阻止其补丁  │
+  │ SVE                      │ 低         │ 已适配，不冲突                      │
+  │ Content Patcher          │ 极低       │ CP 通过 JSON 注入，不使用 Harmony   │
+  │ NPC 对话 mod              │ 低         │ afterDialogues 追加，不阻断原对话   │
+  │ GMCM                     │ 极低       │ SafeDialogueBox 正是为此设计        │
+  │ 多人同步 mod              │ 低         │ BankMod 使用 SMAPI 标准多人 API     │
+  └──────────────────────────┴────────────┴────────────────────────────────────┘
+
+
+五、版本历史
+
+  2026-06-03 — 初始版本
+    - TVPatch 重写：提取 BuildChannelList()，完整镜像原版频道
+    - LetterViewerMenu 反射加固：try-catch + 类型检查
+    - Morris 反射 SVE 感知：_sveLoaded 检测 + 跳过守卫
+    - SVE 1.15.11 源码审查完成

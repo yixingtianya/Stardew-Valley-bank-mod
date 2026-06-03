@@ -53,6 +53,7 @@ internal sealed class BankMod : Mod
     private int _lastMoneySnapshot;
     private int _bankruptGarnishCooldown;
     private bool _lastBankruptcyState;
+    private bool _sveLoaded; // SVE 检测：Morris 可见性控制需要跳过
     private readonly Services.Core.DebtDialogueService _debtDialogue = new();
     private bool _pendingPierreMail;
     private bool _pendingMorrisMail;
@@ -145,8 +146,14 @@ internal sealed class BankMod : Mod
         // Stage 10: TV financial channel Harmony patches
         var tvHarmony = new HarmonyLib.Harmony("bankmod.tv");
         tvHarmony.PatchAll(typeof(Patches.TVPatch).Assembly);
+        Patches.TVPatch.Initialize(Monitor);
         Patches.FbnNewsGenerator.Initialize(_services, _config, Helper.DirectoryPath);
         Monitor.Log("[TV] FBN channel Harmony patches applied", LogLevel.Debug);
+
+        // SVE 检测：SVE 会重写 Morris 的 NPC 逻辑，反射 isInvisible 可能不兼容
+        _sveLoaded = Helper.ModRegistry.IsLoaded("FlashShifter.SVECode");
+        if (_sveLoaded)
+            Monitor.Log("[SVE] Stardew Valley Expanded detected — Morris visibility reflection will be skipped", LogLevel.Debug);
 
         // Console command: debug season shop
         helper.ConsoleCommands.Add("season_shop_debug", I18n.Get("mod.8"), (cmd, args) =>
@@ -1251,20 +1258,36 @@ internal sealed class BankMod : Mod
                     if (!string.IsNullOrEmpty(realText))
                     {
                         // 反射获取 LetterViewerMenu 的 mailMessage 字段并替换
+                        // ⚠️ 反射标记 — 游戏更新时需检查 LetterViewerMenu.mailMessage 字段兼容性
                         var mailMsgField = typeof(LetterViewerMenu).GetField("mailMessage",
                             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
                         if (mailMsgField != null)
                         {
-                            // ^ 是星露谷信件换行符，^^ 是空行，^^^ 是自定义分页标记
-                            // 先按 ^^^ 分页，再在每个页面内保留 ^ 和 ^^ 供游戏渲染引擎处理
-                            string normalized = NormalizeMailText(realText);
-                            string[] pages = normalized.Split(new[] { "^^^" }, StringSplitOptions.RemoveEmptyEntries);
-                            mailMsgField.SetValue(lvm, new List<string>(pages));
-                            Monitor.Log($"[MailDebug] Replaced {title} content via reflection ({pages.Length} pages)", LogLevel.Info);
+                            try
+                            {
+                                // ^ 是星露谷信件换行符，^^ 是空行，^^^ 是自定义分页标记
+                                // 先按 ^^^ 分页，再在每个页面内保留 ^ 和 ^^ 供游戏渲染引擎处理
+                                string normalized = NormalizeMailText(realText);
+                                string[] pages = normalized.Split(new[] { "^^^" }, StringSplitOptions.RemoveEmptyEntries);
+
+                                // 防御性检查：确认当前值是 List<string>，避免其他 mod 并发修改导致类型不匹配
+                                var currentValue = mailMsgField.GetValue(lvm);
+                                if (currentValue is not List<string>)
+                                {
+                                    Monitor.Log($"[MailDebug] mailMessage unexpected type: {currentValue?.GetType()}, creating new list", LogLevel.Warn);
+                                }
+
+                                mailMsgField.SetValue(lvm, new List<string>(pages));
+                                Monitor.Log($"[MailDebug] Replaced {title} content via reflection ({pages.Length} pages)", LogLevel.Info);
+                            }
+                            catch (Exception mailEx)
+                            {
+                                Monitor.Log($"[MailDebug] Reflection failed for {title}: {mailEx.Message}", LogLevel.Error);
+                            }
                         }
                         else
                         {
-                            Monitor.Log($"[MailDebug] Could not find mailMessage field on LetterViewerMenu", LogLevel.Warn);
+                            Monitor.Log($"[MailDebug] mailMessage field not found on LetterViewerMenu — game version may have changed", LogLevel.Warn);
                         }
                     }
                 }
@@ -1466,13 +1489,17 @@ internal sealed class BankMod : Mod
                 try
                 {
                     // Hide real Morris via private isInvisible field (reflection)
-                    var realMorris = Game1.currentLocation?.characters
-                        .OfType<NPC>()
-                        .FirstOrDefault(c => c.Name == "Morris");
-                    if (realMorris != null)
+                    // SVE 重写了 Morris 的 NPC 逻辑，反射 isInvisible 可能不兼容，跳过
+                    if (!_sveLoaded)
                     {
-                        Helper.Reflection.GetField<bool>(realMorris, "isInvisible").SetValue(true);
-                        _morrisOriginalPos = realMorris.Position;
+                        var realMorris = Game1.currentLocation?.characters
+                            .OfType<NPC>()
+                            .FirstOrDefault(c => c.Name == "Morris");
+                        if (realMorris != null)
+                        {
+                            Helper.Reflection.GetField<bool>(realMorris, "isInvisible").SetValue(true);
+                            _morrisOriginalPos = realMorris.Position;
+                        }
                     }
 
                     if (Game1.currentLocation is null) return;
@@ -1533,7 +1560,8 @@ internal sealed class BankMod : Mod
             Helper.Data.WriteSaveData(MailFlags.Save_MorrisEventSeen, "1");
 
             // Restore map Morris visibility
-            if (_morrisOriginalPos.HasValue)
+            // SVE 重写了 Morris 的 NPC 逻辑，反射 isInvisible 可能不兼容，跳过
+            if (_morrisOriginalPos.HasValue && !_sveLoaded)
             {
                 var realMorris = Game1.currentLocation?.characters
                     .OfType<NPC>()
