@@ -71,12 +71,15 @@ internal sealed class BankMod : Mod
         "pause 500/fade/viewport 26 7/pause 400/" +
         "jump farmer/pause 800/" +
         "faceDirection farmer 3/pause 300/" +
-        I18n.Get("mod.2") +
+        Speak("Morris", I18n.Get("mod.2")) + "/pause 500/" +
         "/emote Morris 28/pause 300/" +
-        I18n.Get("mod.3") +
-        I18n.Get("mod.4") +
-        I18n.Get("mod.5") +
-        I18n.Get("mod.6");
+        Speak("Morris", I18n.Get("mod.3")) + "/pause 500/" +
+        Speak("Morris", I18n.Get("mod.4")) + "/pause 300/" +
+        Speak("Morris", I18n.Get("mod.5")) + "/pause 500/" +
+        Speak("Morris", I18n.Get("mod.6")) + "/end";
+
+    private static string Speak(string npc, string text) =>
+        $"speak {npc} \"{text}\"";
     /*********
     ** Public methods
     *********/
@@ -89,6 +92,9 @@ internal sealed class BankMod : Mod
         var sampleKey = "mod.36";
         var sampleVal = I18n.Get(sampleKey);
         Monitor.Log($"[i18n] Locale='{locale}' (empty=English) | {sampleKey}='{sampleVal}'", LogLevel.Debug);
+        var mod2 = I18n.Get("mod.2");
+        Monitor.Log($"[i18n] mod.2 raw bytes: [{string.Join(",", System.Text.Encoding.UTF8.GetBytes(mod2).Take(40))}]", LogLevel.Debug);
+        Monitor.Log($"[i18n] mod.2 repr: '{mod2.Replace("\\", "\\\\").Replace("\"", "\\\"")}'", LogLevel.Debug);
 
         // Load config
         _config = helper.ReadConfig<ModConfig>();
@@ -1441,6 +1447,9 @@ internal sealed class BankMod : Mod
                     }
 
                     if (Game1.currentLocation is null) return;
+                    Monitor.Log($"[MorrisEvent] Script length={MorrisEventScript.Length}", LogLevel.Info);
+                    Monitor.Log($"[MorrisEvent] First 200 chars: {MorrisEventScript[..Math.Min(200, MorrisEventScript.Length)]}", LogLevel.Info);
+                    Monitor.Log($"[MorrisEvent] Raw bytes[30..80]: [{string.Join(",", System.Text.Encoding.UTF8.GetBytes(MorrisEventScript).Skip(30).Take(50))}]", LogLevel.Info);
                     var evt = new Event(MorrisEventScript, Game1.player);
                     Game1.currentLocation.startEvent(evt);
                     _waitingForMorrisEventEnd = true;
