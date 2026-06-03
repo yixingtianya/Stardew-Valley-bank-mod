@@ -169,25 +169,26 @@ internal class NumberInputMenu : IClickableMenu
         }
         else if (key == '+')
         {
-            // +100
-            if (_input.Length > 0 && int.TryParse(_input.ToString(), out int cur))
-            {
-                int newVal = Math.Min(cur + 100, _maxAmount > 0 ? _maxAmount : 999999999);
-                _input.Clear();
-                _input.Append(newVal.ToString());
-                Game1.playSound("smallSelect");
-            }
+            // +100 (start from 0 if empty)
+            int cur = _input.Length > 0 && int.TryParse(_input.ToString(), out int parsed) ? parsed : 0;
+            int newVal = Math.Min(cur + 100, _maxAmount > 0 ? _maxAmount : 999999999);
+            _input.Clear();
+            _input.Append(newVal.ToString());
+            Game1.playSound("smallSelect");
         }
         else if (key == 'P')
         {
-            // +1000
-            if (_input.Length > 0 && int.TryParse(_input.ToString(), out int cur))
-            {
-                int newVal = Math.Min(cur + 1000, _maxAmount > 0 ? _maxAmount : 999999999);
-                _input.Clear();
-                _input.Append(newVal.ToString());
-                Game1.playSound("smallSelect");
-            }
+            // +1000 (start from 0 if empty)
+            int cur = _input.Length > 0 && int.TryParse(_input.ToString(), out int parsed) ? parsed : 0;
+            int newVal = Math.Min(cur + 1000, _maxAmount > 0 ? _maxAmount : 999999999);
+            _input.Clear();
+            _input.Append(newVal.ToString());
+            Game1.playSound("smallSelect");
+        }
+        else if (key == 'M')
+        {
+            // Fill max amount (touch overlay "全部/Max" button)
+            FillMax();
         }
         else if (char.IsDigit(key) && _input.Length < 9)
         {
@@ -240,6 +241,7 @@ internal class NumberInputMenu : IClickableMenu
         if (_maxAmount <= 0)
         {
             Game1.playSound("cancel");
+            Game1.chatBox?.addInfoMessage(_maxAmount <= 0 ? "No limit set" : "Max: " + _maxAmount);
             return;
         }
         _input.Clear();

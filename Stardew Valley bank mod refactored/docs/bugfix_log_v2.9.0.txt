@@ -1,0 +1,102 @@
+Dynamic Financial System — Bug Fix Log v2.9.0
+Date: 2026-06-03
+
+=== Bug 1 (Critical) — TouchOverlay +100 / +1k / CLR buttons dead ===
+
+Root Cause:
+  AddKeyButton() accepted an Action? onClick parameter but never stored it.
+  TouchButton struct had no OnClick field. The callbacks passed for +100, +1k,
+  and CLR were silently discarded.
+
+  In HandleTouchInput, these buttons have KeyChar='\0' and IsSpecial=false,
+  so neither branch fires — clicking them does nothing.
+
+Fix:
+  TouchOverlay.cs:
+  1. Added `public Action? OnClick;` field to TouchButton struct.
+  2. AddKeyButton() now stores onClick into the button: `OnClick = onClick`.
+  3. HandleTouchInput now calls `btn.OnClick?.Invoke()` after the existing
+     Special/KeyChar dispatch.
+
+  NumberInputMenu.cs:
+  4. OnVirtualKeyPressed already handles '+' (add 100), 'P' (add 1000),
+     'C' (clear), '\b' (backspace) — no changes needed here.
+
+Files changed: UI/TouchOverlay.cs (+4 lines net)
+
+
+=== Bug 2 (Critical) — TouchOverlay "全部/Max" button confirms instead of filling max ===
+
+Root Cause:
+  The Max button was created with `SpecialAction = "Confirm"`, which triggers
+  OnConfirm — directly confirming the current input value instead of filling
+  in the maximum allowed amount.
+
+Fix:
+  TouchOverlay.cs:
+  1. Max button changed from `SpecialAction = "Confirm"` to
+     `AddKeyButton('\0', maxLabel, ..., () => OnKeyPressed?.Invoke('M'))`.
+     Now fires OnKeyPressed with char 'M' instead of OnConfirm.
+
+  NumberInputMenu.cs:
+  2. Added `else if (key == 'M') { FillMax(); }` handler in OnVirtualKeyPressed.
+     FillMax() already existed and correctly fills _maxAmount into _input.
+
+  Flow: Touch "Max" → OnKeyPressed('M') → OnVirtualKeyPressed('M') → FillMax()
+        → _input = _maxAmount.ToString() → player sees max value in input box.
+
+Files changed: UI/TouchOverlay.cs (Max button), UI/NumberInputMenu.cs (+3 lines)
+
+
+=== Bug 3 (Medium) — HandleTouchInput OnClick fires for all buttons ===
+
+Root Cause:
+  btn.OnClick?.Invoke() was called unconditionally after the Special/KeyChar
+  dispatch. Currently harmless (digits and Special buttons have no OnClick),
+  but would cause double-firing if a future button has both KeyChar and OnClick.
+
+Fix:
+  TouchOverlay.cs: Moved OnClick?.Invoke() into an else branch:
+    if (btn.IsSpecial) { ... }
+    else if (btn.KeyChar != '\0') { OnKeyPressed?.Invoke(btn.KeyChar); }
+    else { btn.OnClick?.Invoke(); }
+
+
+=== Bug 4 (Low) — +100 / +1k silently ignored on empty input ===
+
+Root Cause:
+  OnVirtualKeyPressed for '+' and 'P' required _input.Length > 0.
+  Empty input → no feedback, no action.
+
+Fix:
+  NumberInputMenu.cs: Both '+' and 'P' handlers now start from 0 when input
+  is empty: `int cur = _input.Length > 0 && TryParse(...) ? parsed : 0;`
+  Empty + 100 = 100, empty + 1000 = 1000.
+
+
+=== Bug 5 (Low) — Max button silent when _maxAmount <= 0 ===
+
+Root Cause:
+  FillMax() returned silently on _maxAmount <= 0 with only a cancel sound.
+  No visual feedback.
+
+Fix:
+  NumberInputMenu.cs: Added chatBox message "No limit set" when _maxAmount <= 0.
+
+
+=== Verification ===
+
+  Build: 0 errors, 7 pre-existing CS8602 warnings (unchanged)
+  DLL:   DynamicFinancialSystem.dll updated in upload directory
+
+  Button behavior after fix:
+  [1] [2] [3] [<-]  [确认]
+  [4] [5] [6] [+100] [全部]   ← +100 adds 100 (from 0 if empty), 全部 fills max
+  [7] [8] [9] [+1k]           ← +1k adds 1000 (from 0 if empty)
+  [0] [CLR] [<-]  [取消]      ← CLR clears input
+
+  Key event chain:
+  +100  → OnKeyPressed('+')  → cur+100 (from 0 if empty, capped at max)
+  +1k   → OnKeyPressed('P')  → cur+1000 (from 0 if empty, capped at max)
+  CLR   → OnKeyPressed('C')  → _input.Clear()
+  Max   → OnKeyPressed('M')  → FillMax() → _input = _maxAmount

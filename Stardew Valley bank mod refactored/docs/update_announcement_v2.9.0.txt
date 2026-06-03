@@ -1,0 +1,25 @@
+Dynamic Financial System v2.9.0 — Update Announcement
+
+Hi everyone! Here's what's new in this update:
+
+Bug Fixes
+
+- Fixed compound interest / anti-compound detection race condition: the compound countdown now executes after the anti-compound check, preventing false penalty triggers on the last day of compounding. PreviousBaseAmount is now properly updated during compounding, and the sliding window resets on compound expiry.
+- Fixed company name corruption after route completion: c.Name is no longer modified by route effects — GetDisplayName() handles all UI display. This eliminates save data pollution where Chinese subsidiary names leaked into config.json and caused matching failures.
+- Fixed loan name sync on route completion: TransferLoansFromDyingCompany now uses OriginalName instead of Name, preventing localized names from being written to save data.
+- Added KnownTranslations entries for subsidiary names (皮埃尔子公司/Joja子公司) so corrupted saves can be migrated.
+
+New Features
+
+- Android mobile touch input support: tap-to-interact, drag-to-scroll, and pinch-to-zoom on all bank menus.
+- Stardew Valley Expanded (SVE) compatibility: the TV financial channel patch now mirrors all vanilla TV channels exactly, preventing conflicts with other TV mods. Morris visibility reflection is automatically skipped when SVE is detected.
+
+Improvements
+
+- TVPatch refactored: extracted BuildChannelList() that faithfully reproduces all vanilla TV channels (including the hidden Fall 26 ??? channel) with FBN appended.
+- LetterViewerMenu reflection hardened with try-catch and type checking — won't crash if the field changes in a future game update.
+- Morris isInvisible reflection now detects SVE and skips gracefully (degraded: Morris may appear duplicated during the event, but no crash).
+
+See git commit messages for full details on each change.
+
+— yixingtianya

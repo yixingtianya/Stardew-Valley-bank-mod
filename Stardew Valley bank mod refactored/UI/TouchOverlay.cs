@@ -27,6 +27,7 @@ internal class TouchOverlay
         public char KeyChar;
         public bool IsSpecial;
         public string SpecialAction;
+        public Action? OnClick;
     }
 
     private readonly List<TouchButton> _buttons = new();
@@ -119,6 +120,10 @@ internal class TouchOverlay
             {
                 OnKeyPressed?.Invoke(btn.KeyChar);
             }
+            else
+            {
+                btn.OnClick?.Invoke();
+            }
 
             Game1.playSound("smallSelect");
             return;
@@ -176,11 +181,7 @@ internal class TouchOverlay
         AddDigitButton('5', baseX + (btnSize + gap), r1y, btnSize);
         AddDigitButton('6', baseX + (btnSize + gap) * 2, r1y, btnSize);
         AddKeyButton('\0', "+100", baseX + (btnSize + gap) * 3, r1y, backW, Color.SteelBlue, () => OnKeyPressed?.Invoke('+'));
-        _buttons.Add(new TouchButton
-        {
-            Bounds = new Rectangle(baseX + (btnSize + gap) * 3 + backW + gap, r1y, allW, btnSize),
-            Label = maxLabel, BorderColor = Color.SteelBlue, IsSpecial = true, SpecialAction = "Confirm"
-        });
+        AddKeyButton('\0', maxLabel, baseX + (btnSize + gap) * 3 + backW + gap, r1y, allW, Color.SteelBlue, () => OnKeyPressed?.Invoke('M'));
 
         // Row 2: 7 8 9 [+1000]
         int r2y = r1y + btnSize + gap;
@@ -269,7 +270,8 @@ internal class TouchOverlay
             Bounds = new Rectangle(x, y, size, size),
             Label = label,
             BorderColor = borderColor,
-            KeyChar = keyChar
+            KeyChar = keyChar,
+            OnClick = onClick
         });
     }
 }
