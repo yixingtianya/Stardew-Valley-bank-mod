@@ -1,7 +1,7 @@
 {
   "Name": "Dynamic Financial System",
   "Author": "yixingtianya",
-  "Version": "2.8.0",
+  "Version": "2.9.0",
   "Description": "动态金融公司系统：手机银行、动态公司、利率波动、破产保护、电视金融频道",
   "UniqueID": "yixingtianya.DynamicFinancialSystem",
   "EntryDll": "DynamicFinancialSystem.dll",
