@@ -156,6 +156,7 @@ internal class BankMenu : IClickableMenu
         {
             _touchOverlay = new TouchOverlay(config, services.Monitor);
             _touchOverlay.SetMode(TouchOverlay.OverlayMode.Operation);
+            _touchOverlay.SetExcludeZone(new Rectangle(xPositionOnScreen, btnY1, width, btnY2 + btnH - btnY1));
             _touchOverlay.OnTabLeft += () =>
             {
                 if (_tabScrollOffset > 0) { _tabScrollOffset--; Game1.playSound("smallSelect"); }

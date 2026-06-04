@@ -146,7 +146,6 @@ public class ModConfig
     *********/
     public bool EnableTouchOverlay { get; set; } = true;
     public int TouchButtonSize { get; set; } = 64;
-    public string TouchOverlayPosition { get; set; } = "Auto";
     public string OpenBankKey { get; set; } = "MouseRight";
 
     /// <summary>Deep-clone the config for snapshot/backup purposes.</summary>
@@ -204,7 +203,6 @@ public class ModConfig
             ShowCompanyDangerWarning = ShowCompanyDangerWarning,
             EnableTouchOverlay = EnableTouchOverlay,
             TouchButtonSize = TouchButtonSize,
-            TouchOverlayPosition = TouchOverlayPosition,
             OpenBankKey = OpenBankKey
         };
     }

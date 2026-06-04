@@ -36,6 +36,7 @@ internal class TouchOverlay
     private bool _wasTouched;
     private readonly ModConfig _config;
     private readonly IMonitor _monitor;
+    private Rectangle _excludeZone;
 
     public event Action<char>? OnKeyPressed;
     public event Action? OnConfirm;
@@ -49,6 +50,8 @@ internal class TouchOverlay
         _config = config;
         _monitor = monitor;
     }
+
+    public void SetExcludeZone(Rectangle zone) => _excludeZone = zone;
 
     public static bool ShouldShow(ModConfig config) => IsAndroid && config.EnableTouchOverlay;
 
@@ -213,6 +216,10 @@ internal class TouchOverlay
         int baseX = vpW - (actionW * 2 + gap + 20);
         if (baseX < 10) baseX = 10;
         int baseY = vpH - (btnSize * 3 + gap * 2 + 20);
+
+        // Shift overlay upward if it overlaps the exclusion zone (e.g., BankMenu buttons)
+        if (!_excludeZone.IsEmpty && baseY < _excludeZone.Bottom)
+            baseY = _excludeZone.Y - btnSize * 3 - gap * 2 - 8;
 
         string tabLeftLabel = isChinese ? "公司<" : "Tab<";
         string tabRightLabel = isChinese ? ">公司" : ">Tab";
