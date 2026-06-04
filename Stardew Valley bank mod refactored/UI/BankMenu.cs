@@ -238,7 +238,8 @@ internal class BankMenu : IClickableMenu
             HasSoldHistory = tracking is not null && tracking.CumulativeSellCount > 0,
             DecayDays = tracking?.DecayDays ?? 0,
             SuppressionStacks = suppression?.Stacks ?? 0,
-            IsPenaltyPeriod = ca is not null && ca.PenaltyDaysRemaining > 0
+            IsPenaltyPeriod = ca is not null && ca.PenaltyDaysRemaining > 0,
+            PreGeneratedRandom = _account.TodayRandoms.TryGetValue(CurrentCompany.Name, out double rnd) ? rnd : null
         };
     }
 

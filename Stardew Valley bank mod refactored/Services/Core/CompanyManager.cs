@@ -87,6 +87,9 @@ public class CompanyManager : ICompanyManager
     {
         var account = _accountService.Load();
 
+        // Step 0: Rotate pre-generated values (tomorrow → today, generate new tomorrow)
+        GenerateTodayValues(account);
+
         // Step 1: Update consecutive selling days
         _shipmentTracking.UpdateConsecutiveDays(account);
 
@@ -213,6 +216,9 @@ public class CompanyManager : ICompanyManager
         {
             Game1.chatBox?.addInfoMessage(I18n.Get("cmp.5"));
         }
+
+        // Step 8: Pre-generate tomorrow's luck and random values for FBN forecast accuracy
+        // (called from DayEnding in BankMod.cs)
 
         _accountService.Save(account);
     }
@@ -503,11 +509,15 @@ public class CompanyManager : ICompanyManager
                     && account.FbnTempBoostCompany == company.CompanyName)
                     dailyProb = _config.ProsperousAnnualRisk;
 
-                if (dailyProb > 0 && _rng.NextDouble() < dailyProb)
+                double bankruptRoll;
+                bool hasPreRoll = account.TomorrowBankruptRandoms.TryGetValue(company.CompanyName, out double br);
+                bankruptRoll = hasPreRoll ? br : _rng.NextDouble();
+                _monitor.Log($"[Bankrupt] {company.CompanyName}: hasPreRoll={hasPreRoll}, roll={bankruptRoll:F4}, prob={dailyProb:F4}, total={account.TomorrowBankruptRandoms.Count}", LogLevel.Debug);
+                if (dailyProb > 0 && bankruptRoll < dailyProb)
                 {
                     _monitor.Log($"[Bankrupt] {company.CompanyName} went bankrupt (status={company.Status}, dailyProb={dailyProb:F4})", LogLevel.Warn);
                     TransferLoansFromDyingCompany(account, company);
-                    LiquidateCompany(account, company);
+                    LiquidateCompany(account, company, I18n.Get("cmp.26"));
                     continue;
                 }
             }
@@ -516,7 +526,7 @@ public class CompanyManager : ICompanyManager
             if (company.FuelStock <= 0 && newStatus == CompanyStatus.Dying && company.RestructuringDaysRemaining <= 0)
             {
                 TransferLoansFromDyingCompany(account, company);
-                LiquidateCompany(account, company);
+                LiquidateCompany(account, company, I18n.Get("cmp.27"));
             }
         }
     }
@@ -569,6 +579,12 @@ public class CompanyManager : ICompanyManager
                 ca.AccumulatedInterest = Math.Max(0, ca.DepositBalance - company.DepositLimit);
                 ca.BaseAmount = ca.DepositBalance - ca.AccumulatedInterest;
                 ca.PreviousBaseAmount = ca.BaseAmount;
+                // Reset anti-compound tracking to avoid false detection after rebalance.
+                // Without this, DetectManualCompoundInterest sees the AccInt drop as
+                // "interest withdrawn and re-deposited as principal" → false penalty.
+                ca.PreviousAccumulatedInterest = ca.AccumulatedInterest;
+                ca.AccIntDecreasedInWindow = false;
+                _monitor.Log($"[Rebalance] {ca.CompanyName}: AccInt reset to {ca.AccumulatedInterest}, BaseAmount={ca.BaseAmount} (anti-compound tracking cleared)", LogLevel.Info);
             }
 
             var ctx = new InterestCalculationContext
@@ -583,7 +599,8 @@ public class CompanyManager : ICompanyManager
                 HasSoldHistory = HasSoldHistory(account, company),
                 DecayDays = GetDecayDays(account, company),
                 SuppressionStacks = GetSuppressionStacks(account, company),
-                IsPenaltyPeriod = ca.PenaltyDaysRemaining > 0
+                IsPenaltyPeriod = ca.PenaltyDaysRemaining > 0,
+                PreGeneratedRandom = account.TodayRandoms.TryGetValue(ca.CompanyName, out double rnd) ? rnd : null
             };
 
             var calculator = company.IsDynamic ? _dynamicInterestCalculator : _fixedInterestCalculator;
@@ -825,6 +842,54 @@ public class CompanyManager : ICompanyManager
         return suppression?.Stacks ?? 0;
     }
 
+    /// <summary>Pre-generate tomorrow's per-company random values for FBN forecast.
+    /// Called at DayEnding. Only dynamic companies get random volatility.</summary>
+    public void PreGenerateTomorrowValues(BankAccountData account)
+    {
+        account.TomorrowRandoms.Clear();
+        account.TomorrowBankruptRandoms.Clear();
+        var activeCompanies = account.DynamicCompanies
+            .Where(c => c.Status != CompanyStatus.Bankrupt)
+            .ToList();
+        var dynamicNames = activeCompanies.Select(c => c.CompanyName).ToHashSet();
+        foreach (var ca in account.CompanyAccounts)
+        {
+            if (dynamicNames.Contains(ca.CompanyName))
+                account.TomorrowRandoms[ca.CompanyName] = _rng.NextDouble() * 2 - 1; // [-1, +1]
+        }
+        // Pre-generate bankruptcy random check for each active company
+        foreach (var dc in activeCompanies)
+        {
+            account.TomorrowBankruptRandoms[dc.CompanyName] = _rng.NextDouble(); // [0, 1)
+        }
+        // Pre-generate tomorrow's luck (mirrors SDV: Math.Min(0.1, random.Next(-100, 101) / 1000.0))
+        account.TomorrowLuck = Math.Min(0.1, _rng.Next(-100, 101) / 1000.0);
+        _monitor.Log($"[FBN] PreGenerateTomorrow: luck={account.TomorrowLuck:F4}, randoms={account.TomorrowRandoms.Count}, bankruptRandoms={account.TomorrowBankruptRandoms.Count}", LogLevel.Debug);
+    }
+
+    /// <summary>Generate today's per-company random values and rotate tomorrow's into today's.
+    /// Called at DayStarted. Ensures reload stability (today's values are saved to disk).</summary>
+    public void GenerateTodayValues(BankAccountData account)
+    {
+        // Rotate: tomorrow's values become today's
+        account.TodayRandoms = new Dictionary<string, double>(account.TomorrowRandoms);
+        // Tomorrow's bankruptcy randoms are consumed at UpdateCompanyStatuses — do NOT clear here.
+        // They were pre-generated at DayEnding and saved to disk; clearing here would regenerate
+        // them with a different RNG sequence, defeating the determinism guarantee.
+        // Regenerate only the non-bankruptcy randoms (company volatility + luck)
+        account.TomorrowRandoms.Clear();
+        var activeCompanies = account.DynamicCompanies
+            .Where(c => c.Status != CompanyStatus.Bankrupt)
+            .ToList();
+        var dynamicNames = activeCompanies.Select(c => c.CompanyName).ToHashSet();
+        foreach (var ca in account.CompanyAccounts)
+        {
+            if (dynamicNames.Contains(ca.CompanyName))
+                account.TomorrowRandoms[ca.CompanyName] = _rng.NextDouble() * 2 - 1;
+        }
+        account.TomorrowLuck = Math.Min(0.1, _rng.Next(-100, 101) / 1000.0);
+    }
+
     /// <summary>Decrement restructuring days; liquidate if expired without revival.</summary>
     private void ProgressRestructuring(BankAccountData account)
     {
@@ -1064,7 +1129,7 @@ public class CompanyManager : ICompanyManager
     }
 
     /// <summary>Formal liquidation: return deposit by status tier, clear company, reset shipment counter.</summary>
-    private void LiquidateCompany(BankAccountData account, DynamicCompanyData company)
+    private void LiquidateCompany(BankAccountData account, DynamicCompanyData company, string? reason = null)
     {
         double returnRate = company.Status switch
         {
@@ -1090,6 +1155,8 @@ public class CompanyManager : ICompanyManager
             Game1.player.Money += returnAmount;
 
         string msg = I18n.Get("cmp.20");
+        if (!string.IsNullOrEmpty(reason))
+            msg += $" {reason}";
         if (returnAmount > 0)
             msg += I18n.Get("cmp.21", new { amount = returnAmount });
         else

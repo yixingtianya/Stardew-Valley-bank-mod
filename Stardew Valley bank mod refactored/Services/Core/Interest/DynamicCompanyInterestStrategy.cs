@@ -27,12 +27,13 @@ public class DynamicCompanyInterestStrategy : IInterestCalculator
         // Stage 7.1/7.2: consecutive sell bonus or decay
         rate += GetConsecutiveAdjustment(ctx, isDeposit: true);
 
-        // Stage 7.3: competitor suppression
-        rate -= GetSuppressionDrop(ctx);
+        // Stage 7.4 step 4: luck flat additive (coefficient = max ±%, sign from DailyLuck)
+        if (ctx.LuckEnabled && ctx.DailyLuck != 0)
+            rate += Math.Sign(ctx.DailyLuck) * ctx.Config.LuckStrengthCoefficient / 100.0;
 
-        // Stage 7.4 step 4: luck multiplier
-        if (ctx.LuckEnabled)
-            rate *= 1 + ctx.DailyLuck * ctx.Config.LuckStrengthCoefficient;
+        // Stage 7.4 step 4.5: random volatility (multiplicative, pre-generated, scaled by multiplier)
+        if (ctx.Config.RandomnessMultiplier > 0 && ctx.PreGeneratedRandom.HasValue)
+            rate *= 1 + ctx.PreGeneratedRandom.Value * 0.5 * (ctx.Config.RandomnessMultiplier / 5.0);
 
         // Stage 7.4 step 5: weather bonus
         if (ctx.WeatherEnabled)
@@ -59,12 +60,13 @@ public class DynamicCompanyInterestStrategy : IInterestCalculator
         // Stage 7.1/7.2: consecutive sell bonus or decay
         rate += GetConsecutiveAdjustment(ctx, isDeposit: false);
 
-        // Stage 7.3: competitor suppression
-        rate -= GetSuppressionDrop(ctx);
+        // Stage 7.4 step 4: luck flat additive (coefficient = max ±%, sign from DailyLuck)
+        if (ctx.LuckEnabled && ctx.DailyLuck != 0)
+            rate += Math.Sign(ctx.DailyLuck) * ctx.Config.LuckStrengthCoefficient / 100.0;
 
-        // Stage 7.4 step 4: luck multiplier
-        if (ctx.LuckEnabled)
-            rate *= 1 + ctx.DailyLuck * ctx.Config.LuckStrengthCoefficient;
+        // Stage 7.4 step 4.5: random volatility (multiplicative, pre-generated, scaled by multiplier)
+        if (ctx.Config.RandomnessMultiplier > 0 && ctx.PreGeneratedRandom.HasValue)
+            rate *= 1 + ctx.PreGeneratedRandom.Value * 0.5 * (ctx.Config.RandomnessMultiplier / 5.0);
 
         // Stage 7.4 step 5: weather bonus
         if (ctx.WeatherEnabled)
@@ -94,7 +96,7 @@ public class DynamicCompanyInterestStrategy : IInterestCalculator
         rate -= GetSuppressionDrop(ctx);
 
         if (ctx.LuckEnabled)
-            rate *= 1 + ctx.DailyLuck * ctx.Config.LuckStrengthCoefficient;
+            rate += ctx.DailyLuck * ctx.Config.LuckStrengthCoefficient;
 
         if (ctx.WeatherEnabled)
             rate += GetWeatherBonus(company, ctx);

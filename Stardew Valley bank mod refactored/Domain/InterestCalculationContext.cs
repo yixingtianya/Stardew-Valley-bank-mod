@@ -32,4 +32,7 @@ public class InterestCalculationContext
 
     /// <summary>Whether this account is under V3.7 manual-compound penalty (rate × 0.10).</summary>
     public bool IsPenaltyPeriod { get; init; }
+
+    /// <summary>Pre-generated random modifier for today's rate (from DayEnding).</summary>
+    public double? PreGeneratedRandom { get; init; }
 }

@@ -1,4 +1,4 @@
-namespace BankMod.Data;
+﻿namespace BankMod.Data;
 
 /// <summary>Mod configuration read from config.json — all parameters aligned with value.txt V1.0.</summary>
 public class ModConfig
@@ -49,6 +49,11 @@ public class ModConfig
     *********/
     public bool EnableLuckInfluence { get; set; } = true;
     public double LuckStrengthCoefficient { get; set; } = 2.5;
+
+    /*********
+    ** 随机波动影响（乘法，基于基础利率）
+    *********/
+    public double RandomnessMultiplier { get; set; } = 0;
 
     /*********
     ** 天气影响

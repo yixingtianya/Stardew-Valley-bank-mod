@@ -26,4 +26,10 @@ public interface ICompanyManager
 
     /// <summary>Stage 9: Rescue investment during pre-bankruptcy grace period. Returns true on success.</summary>
     bool RescueInvest(BankAccountData account, string companyName, int amount);
+
+    /// <summary>Pre-generate tomorrow's luck and per-company random values for FBN forecast.</summary>
+    void PreGenerateTomorrowValues(BankAccountData account);
+
+    /// <summary>Generate today's per-company random values and rotate tomorrow's into today's.</summary>
+    void GenerateTodayValues(BankAccountData account);
 }

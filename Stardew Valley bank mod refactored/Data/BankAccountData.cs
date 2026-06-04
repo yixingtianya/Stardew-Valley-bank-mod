@@ -62,6 +62,16 @@ public class BankAccountData
     public int FbnEventDay { get; set; }
     public bool FbnShowOutcome { get; set; }
 
+    // Pre-generated values (for reload stability + FBN forecast)
+    /// <summary>Today's random modifier per company (generated at DayStarted, saved to disk for reload stability).</summary>
+    public Dictionary<string, double> TodayRandoms { get; set; } = new();
+    /// <summary>Tomorrow's random modifier per company (generated at DayEnding, used by FBN forecast).</summary>
+    public Dictionary<string, double> TomorrowRandoms { get; set; } = new();
+    /// <summary>Tomorrow's DailyLuck value (generated at DayEnding, used by FBN forecast). Matches SDV formula: random.Next(-100, 101) / 1000.0.</summary>
+    public double TomorrowLuck { get; set; }
+    /// <summary>Pre-generated random value [0,1) for each company's bankruptcy check (generated at DayEnding, consumed at DayStarted).</summary>
+    public Dictionary<string, double> TomorrowBankruptRandoms { get; set; } = new();
+
     // Stage 15 NPC dialogue tracking
     public List<string> DebtNpcSpoken { get; set; } = new();
     public List<string> BankruptcyNpcGifted { get; set; } = new();

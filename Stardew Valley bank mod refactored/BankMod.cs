@@ -345,6 +345,10 @@ internal sealed class BankMod : Mod
 
         var account = _services.BankAccountService.Load();
         _services.ShipmentTracking.ProcessShipments(account, _services.FuelService, Monitor);
+
+        // Pre-generate tomorrow's luck and random values for FBN forecast accuracy
+        _services.CompanyManager.PreGenerateTomorrowValues(account);
+
         _services.BankAccountService.Save(account);
 
         // Snapshot money before overnight shipping income is added
@@ -581,6 +585,14 @@ internal sealed class BankMod : Mod
             name: () => I18n.Get("mod.48"),
             tooltip: () => I18n.Get("mod.49"),
             min: 0f, max: 5f, interval: 0.1f);
+
+        // ============== 随机波动 ==============
+        gmcm.AddNumberOption(ModManifest,
+            getValue: () => (float)_config.RandomnessMultiplier,
+            setValue: val => _config.RandomnessMultiplier = val,
+            name: () => I18n.Get("mod.198"),
+            tooltip: () => I18n.Get("mod.199"),
+            min: 0f, max: 10f, interval: 0.1f);
 
         // ============== 天气影响 ==============
         gmcm.AddSectionTitle(ModManifest, () => I18n.Get("mod.50"), () => I18n.Get("mod.51"));

@@ -433,20 +433,21 @@ internal static class FbnNewsGenerator
     private static void GetForecastNews(List<string> lines, BankAccountData account, string weather)
     {
         lines.Add(""); lines.Add("");
-        double predictedLuck = _rng.NextDouble() * 0.2 - 0.1;
-        string luckWord = predictedLuck > 0.05 ? I18n.Get("fbn.173") : predictedLuck < -0.05 ? I18n.Get("fbn.174") : I18n.Get("fbn.175");
-        string luckIcon = predictedLuck > 0.05 ? "☀" : predictedLuck < -0.05 ? "☂" : "☁";
+        _s?.Monitor.Log($"[FBN] Forecast: TomorrowLuck={account.TomorrowLuck:F4}, LuckCoeff={_c!.LuckStrengthCoefficient}, weather={weather}, TomorrowRandoms={account.TomorrowRandoms.Count}", LogLevel.Info);
 
-        string weatherCN = WeatherToCN(weather);
-        string weatherImpact = weather switch
+        // Weather modifier: bad weather → higher rates, good weather → lower rates
+        double weatherMod = 0;
+        if (_c.EnableWeatherInfluence)
         {
-            "Rain" => I18n.Get("fbn.176"),
-            "Storm" => I18n.Get("fbn.177"),
-            "Snow" => I18n.Get("fbn.178"),
-            "Wind" => I18n.Get("fbn.179"),
-            "Sun" => I18n.Get("fbn.180"),
-            _ => I18n.Get("fbn.181")
-        };
+            weatherMod = weather switch
+            {
+                "Rain" => 0.001,
+                "Storm" => 0.002,
+                "Snow" => 0.0005,
+                "Sun" => -0.0005,
+                _ => 0
+            };
+        }
 
         lines.Add(I18n.Get("fbn.182"));
         lines.Add(I18n.Get("fbn.183"));
@@ -457,11 +458,31 @@ internal static class FbnNewsGenerator
             if (dc.Status == CompanyStatus.Bankrupt) continue;
             if (shown >= 3) break;
             shown++;
-            double predictedChange = (_rng.NextDouble() - 0.4) * 0.03;
-            string arrow = predictedChange > 0.005 ? "▲" : predictedChange < -0.005 ? "▼" : "→";
             var cd = CropDataProvider.GetByCode(dc.CropCode);
             string name = cd?.DisplayName ?? dc.CropCode;
-            lines.Add($"  {name}：{arrow} {Math.Abs(predictedChange * 100):F2}%");
+            // 3-tier base rate (same as actual calculation)
+            double baseRate = cd?.R > 0.20 ? cd.R * 0.5 : cd?.R > 0 ? cd.R : 0;
+
+            // Luck flat additive: sign(tomorrowLuck) × coefficient / 100
+            double luckFlat = _c.EnableLuckInfluence
+                ? Math.Sign(account.TomorrowLuck) * _c.LuckStrengthCoefficient / 100.0
+                : 0;
+
+            if (_c.RandomnessMultiplier > 0 && account.TomorrowRandoms.TryGetValue(dc.CompanyName, out double baseRnd))
+            {
+                // Map random [-1,+1] to slot [0,4], scale by multiplier (5 = ±50%)
+                int slot = (int)Math.Clamp((baseRnd + 1.0) / 2.0 * 5, 0, 4);
+                double rnd = -1.0 + slot * 0.5;
+                double rate = (baseRate + luckFlat) * (1 + rnd * 0.5 * (_c.RandomnessMultiplier / 5.0)) + weatherMod;
+                rate = Math.Max(0, rate);
+                lines.Add($"  {name}：{rate * 100:F1}%");
+            }
+            else
+            {
+                // No randomness: single predicted rate
+                double rate = Math.Max(0, baseRate + luckFlat + weatherMod);
+                lines.Add($"  {name}：{rate * 100:F2}%");
+            }
         }
         if (shown == 0) lines.Add(I18n.Get("fbn.184"));
     }
