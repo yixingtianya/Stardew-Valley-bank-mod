@@ -25,10 +25,8 @@ internal static class FbnNewsGenerator
         int today = Game1.dayOfMonth;
         string season = Game1.currentSeason;
         int cacheKey = Game1.year * 1000 + season.GetHashCode() + today;
-        _s?.Monitor.Log($"[FBN] Generate: cacheHit={_cachedContent != null && _lastGeneratedDay == cacheKey}, cachedContentNull={_cachedContent == null}, lastDay={_lastGeneratedDay}, cacheKey={cacheKey}", LogLevel.Info);
         if (_cachedContent != null && _lastGeneratedDay == cacheKey)
         {
-            _s?.Monitor.Log($"[FBN] Generate: returning cached content ({_cachedContent.Count} lines)", LogLevel.Info);
             return _cachedContent;
         }
         _lastGeneratedDay = cacheKey;
@@ -95,12 +93,10 @@ internal static class FbnNewsGenerator
     // ====== B2: FBN 真假消息 ======
     private static bool TryFbnEventNews(List<string> lines, BankAccountData account)
     {
-        _s?.Monitor.Log($"[FBN] TryFbnEventNews: company={account.FbnEventCompany}, eventDay={account.FbnEventDay}, today={Game1.dayOfMonth}, showOutcome={account.FbnShowOutcome}", LogLevel.Info);
         // Day of event: show crisis news from TV2.txt (both real and fake)
         if (!string.IsNullOrEmpty(account.FbnEventCompany) && account.FbnEventDay == Game1.dayOfMonth && !account.FbnShowOutcome)
         {
             string text = ReadTv2Section("TV2.txt", account.FbnEventCompany);
-            _s?.Monitor.Log($"[FBN] ReadTv2Section result: len={text.Length}", LogLevel.Info);
             if (!string.IsNullOrEmpty(text))
             {
                 lines.Add(""); lines.Add("");
@@ -119,7 +115,6 @@ internal static class FbnNewsGenerator
                     sb.Append(chunk);
                 }
                 if (sb.Length > 0) lines.Add(sb.ToString());
-                _s?.Monitor.Log($"[FBN] Crisis news for {account.FbnEventCompany} (real={account.FbnEventIsReal})", LogLevel.Info);
                 account.FbnShowOutcome = true; // always show outcome tomorrow
                 return true;
             }
@@ -146,7 +141,6 @@ internal static class FbnNewsGenerator
                     sb.Append(chunk);
                 }
                 if (sb.Length > 0) lines.Add(sb.ToString());
-                _s?.Monitor.Log($"[FBN] Outcome news for {account.FbnEventCompany} (died={died}, wasReal={account.FbnEventIsReal})", LogLevel.Info);
             }
             account.FbnEventCompany = "";
             account.FbnShowOutcome = false;
@@ -433,7 +427,6 @@ internal static class FbnNewsGenerator
     private static void GetForecastNews(List<string> lines, BankAccountData account, string weather)
     {
         lines.Add(""); lines.Add("");
-        _s?.Monitor.Log($"[FBN] Forecast: TomorrowLuck={account.TomorrowLuck:F4}, LuckCoeff={_c!.LuckStrengthCoefficient}, weather={weather}, TomorrowRandoms={account.TomorrowRandoms.Count}", LogLevel.Info);
 
         // Weather modifier: bad weather → higher rates, good weather → lower rates
         double weatherMod = 0;

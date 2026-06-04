@@ -509,10 +509,8 @@ public class CompanyManager : ICompanyManager
                     && account.FbnTempBoostCompany == company.CompanyName)
                     dailyProb = _config.ProsperousAnnualRisk;
 
-                double bankruptRoll;
-                bool hasPreRoll = account.TomorrowBankruptRandoms.TryGetValue(company.CompanyName, out double br);
-                bankruptRoll = hasPreRoll ? br : _rng.NextDouble();
-                _monitor.Log($"[Bankrupt] {company.CompanyName}: hasPreRoll={hasPreRoll}, roll={bankruptRoll:F4}, prob={dailyProb:F4}, total={account.TomorrowBankruptRandoms.Count}", LogLevel.Debug);
+                double bankruptRoll = account.TomorrowBankruptRandoms.TryGetValue(company.CompanyName, out double br)
+                    ? br : _rng.NextDouble();
                 if (dailyProb > 0 && bankruptRoll < dailyProb)
                 {
                     _monitor.Log($"[Bankrupt] {company.CompanyName} went bankrupt (status={company.Status}, dailyProb={dailyProb:F4})", LogLevel.Warn);
@@ -864,7 +862,6 @@ public class CompanyManager : ICompanyManager
         }
         // Pre-generate tomorrow's luck (mirrors SDV: Math.Min(0.1, random.Next(-100, 101) / 1000.0))
         account.TomorrowLuck = Math.Min(0.1, _rng.Next(-100, 101) / 1000.0);
-        _monitor.Log($"[FBN] PreGenerateTomorrow: luck={account.TomorrowLuck:F4}, randoms={account.TomorrowRandoms.Count}, bankruptRandoms={account.TomorrowBankruptRandoms.Count}", LogLevel.Debug);
     }
 
     /// <summary>Generate today's per-company random values and rotate tomorrow's into today's.
