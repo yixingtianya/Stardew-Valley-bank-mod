@@ -1464,18 +1464,11 @@ internal sealed class BankMod : Mod
         bool isTriggerKey = e.Button is SButton.MouseRight or SButton.ControllerA;
         if (!isTriggerKey && Enum.TryParse<SButton>(_config.OpenBankKey, out var customKey))
             isTriggerKey = e.Button == customKey;
-        // Android: touch maps to MouseLeft, require cursor near player to prevent misfire
+        // Android: touch maps to MouseLeft, so also trigger when holding phone
         bool isMobilePlatform = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
             System.Runtime.InteropServices.OSPlatform.Create("Android"));
         if (!isTriggerKey && isMobilePlatform && e.Button == SButton.MouseLeft)
-        {
-            var playerPos = Game1.player?.Tile;
-            var cursorTile = e.Cursor.Tile;
-            if (playerPos.HasValue &&
-                Math.Abs(cursorTile.X - playerPos.Value.X) <= 2 &&
-                Math.Abs(cursorTile.Y - playerPos.Value.Y) <= 2)
-                isTriggerKey = true;
-        }
+            isTriggerKey = true;
         if (!isTriggerKey) return;
 
         if (Game1.activeClickableMenu is not null) return;
