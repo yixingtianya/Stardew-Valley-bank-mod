@@ -12,12 +12,25 @@ namespace BankMod.UI;
 
 internal class BankMenu : IClickableMenu
 {
-    private const int WindowHeight = 820;
+    private static int GetWindowHeight() =>
+        DeviceHelper.MenuHeight(820, 680);
     private readonly bool _isChinese;
     private static bool IsChineseLocale =>
         LocalizedContentManager.CurrentLanguageCode == LocalizedContentManager.LanguageCode.zh;
     private static int GetWindowWidth() =>
         IsChineseLocale ? 600 : 720;
+    private static int GetLoanEntryHeight(bool isChinese) =>
+        DeviceHelper.IsAndroid
+            ? (isChinese ? 100 : 120)
+            : (isChinese ? 120 : 145);
+    private static readonly int[] LoanRowOffsetsChinese = { 6, 28, 50, 72, 94 };
+    private static int GetLoanRowOffset(int row, bool isChinese, int btnH)
+    {
+        int baseOffset = isChinese
+            ? LoanRowOffsetsChinese[row]
+            : btnH + new[] { 8, 30, 52, 74, 96 }[row];
+        return DeviceHelper.IsAndroid ? baseOffset - 4 : baseOffset;
+    }
 
     private readonly BankAccountData _account;
     private readonly ModConfig _config;
@@ -65,9 +78,9 @@ internal class BankMenu : IClickableMenu
     public BankMenu(BankAccountData account, ModConfig config, IModHelper helper, ModServices services, int selectedTab = 0)
         : base(
             (Game1.uiViewport.Width - GetWindowWidth()) / 2,
-            (Game1.uiViewport.Height - WindowHeight) / 2,
+            (Game1.uiViewport.Height - GetWindowHeight()) / 2,
             GetWindowWidth(),
-            WindowHeight
+            GetWindowHeight()
         )
     {
         _isChinese = IsChineseLocale;
@@ -105,7 +118,7 @@ internal class BankMenu : IClickableMenu
         // Buttons: deposit/withdraw/borrow on top row, conditional on bottom row
         int centerX = xPositionOnScreen + width / 2;
         int btnY1 = yPositionOnScreen + height - 90;
-        int btnY2 = yPositionOnScreen + height - 40;
+        int btnY2 = yPositionOnScreen + height - (DeviceHelper.IsAndroid ? 30 : 40);
         int btnW = _isChinese ? 130 : 150;
         int btnH = 40;
         int gap = 10;
@@ -547,7 +560,7 @@ internal class BankMenu : IClickableMenu
             if (companyLoans.Count > 0)
             {
                 int listY = loanY + lineH + 4;
-                int entryH = _isChinese ? 120 : 145;
+                int entryH = GetLoanEntryHeight(_isChinese);
                 int maxVisible = 2;
                 int listW = width - 80;
                 int scrollBarX = infoX + listW - 14;
@@ -643,21 +656,21 @@ internal class BankMenu : IClickableMenu
                             headerColor = daysLeft <= 2 ? Color.Orange : Color.Gold;
                         }
                     }
-                    DrawInfoLine(b, header, infoX + 8, ey + (_isChinese ? 6 : btnH + 8), headerColor);
+                    DrawInfoLine(b, header, infoX + 8, ey + GetLoanRowOffset(0, _isChinese, btnH), headerColor);
 
                     // Row 2: principal + rate
-                    DrawInfoLine(b, I18n.Get("uib.41", new { principal = l.Principal.ToString("N0"), rate = $"{l.InterestRate * 100:F2}%", days = l.RepaymentPeriodDays }), infoX + 8, ey + (_isChinese ? 28 : btnH + 30), Color.White * 0.8f);
+                    DrawInfoLine(b, I18n.Get("uib.41", new { principal = l.Principal.ToString("N0"), rate = $"{l.InterestRate * 100:F2}%", days = l.RepaymentPeriodDays }), infoX + 8, ey + GetLoanRowOffset(1, _isChinese, btnH), Color.White * 0.8f);
 
                     // Row 3: accumulated interest
-                    DrawInfoLine(b, I18n.Get("uib.42", new { amount = l.AccumulatedInterest.ToString("N0") }), infoX + 8, ey + (_isChinese ? 50 : btnH + 52), Color.OrangeRed);
+                    DrawInfoLine(b, I18n.Get("uib.42", new { amount = l.AccumulatedInterest.ToString("N0") }), infoX + 8, ey + GetLoanRowOffset(2, _isChinese, btnH), Color.OrangeRed);
 
                     // Row 4: overdue (if any)
                     if (l.OverdueInterest > 0)
-                        DrawInfoLine(b, I18n.Get("uib.43", new { amount = l.OverdueInterest.ToString("N0") }), infoX + 8, ey + (_isChinese ? 72 : btnH + 74), Color.Red);
+                        DrawInfoLine(b, I18n.Get("uib.43", new { amount = l.OverdueInterest.ToString("N0") }), infoX + 8, ey + GetLoanRowOffset(3, _isChinese, btnH), Color.Red);
 
                     // Row 5: total owed
                     int owed = l.Principal + l.AccumulatedInterest + l.OverdueInterest;
-                    DrawInfoLine(b, I18n.Get("uib.44", new { amount = owed.ToString("N0") }), infoX + 8, ey + (_isChinese ? 94 : btnH + 96), Color.Red);
+                    DrawInfoLine(b, I18n.Get("uib.44", new { amount = owed.ToString("N0") }), infoX + 8, ey + GetLoanRowOffset(4, _isChinese, btnH), Color.Red);
                 }
             }
         }
@@ -1182,7 +1195,7 @@ internal class BankMenu : IClickableMenu
             int lineOffset = GetDepositLineOffset();
             int loanY = infoY + lineH * (lineOffset + 9);
             int listY = loanY + lineH + 4;
-            int entryH = _isChinese ? 120 : 145;
+            int entryH = GetLoanEntryHeight(_isChinese);
             int maxLoanVisible = 2;
             int listW = width - 80;
             int scrollBarX = infoX + listW - 14;
