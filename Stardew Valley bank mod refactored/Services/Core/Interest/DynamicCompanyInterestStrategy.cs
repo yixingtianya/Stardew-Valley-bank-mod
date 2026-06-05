@@ -84,31 +84,6 @@ public class DynamicCompanyInterestStrategy : IInterestCalculator
         return rate;
     }
 
-    /// <summary>
-    /// Fallback for companies not found in crop data (e.g. Coffee Bean, fixed companies misrouted here).
-    /// Uses config interest rates directly -- no crop-based discount rules applied.
-    /// </summary>
-    private static double FallbackRate(double configRate, CompanyDefinition company, InterestCalculationContext ctx)
-    {
-        double rate = configRate;
-
-        rate += GetConsecutiveAdjustment(ctx, isDeposit: true);
-        rate -= GetSuppressionDrop(ctx);
-
-        if (ctx.LuckEnabled)
-            rate += ctx.DailyLuck * ctx.Config.LuckStrengthCoefficient;
-
-        if (ctx.WeatherEnabled)
-            rate += GetWeatherBonus(company, ctx);
-
-        if (!ctx.Config.AllowNegativeInterest)
-            rate = Math.Max(0, rate);
-        else
-            rate = Math.Max(ctx.Config.DepositRateFloor, rate);
-
-        return rate;
-    }
-
     private static double GetConsecutiveAdjustment(InterestCalculationContext ctx, bool isDeposit)
     {
         if (ctx.ConsecutiveSellDays > 0)
@@ -133,12 +108,6 @@ public class DynamicCompanyInterestStrategy : IInterestCalculator
             return -Math.Min(ctx.DecayDays * decayPerDay, cap);
         }
         return 0;
-    }
-
-    private static double GetSuppressionDrop(InterestCalculationContext ctx)
-    {
-        if (ctx.SuppressionStacks <= 0) return 0;
-        return ctx.SuppressionStacks * Math.Abs(ctx.Config.SuppressMaxDropPerDay);
     }
 
     private static double GetWeatherBonus(CompanyDefinition company, InterestCalculationContext ctx)

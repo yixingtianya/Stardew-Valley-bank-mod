@@ -864,27 +864,11 @@ public class CompanyManager : ICompanyManager
         account.TomorrowLuck = Math.Min(0.1, _rng.Next(-100, 101) / 1000.0);
     }
 
-    /// <summary>Generate today's per-company random values and rotate tomorrow's into today's.
-    /// Called at DayStarted. Ensures reload stability (today's values are saved to disk).</summary>
+    /// <summary>Rotate tomorrow's pre-generated values into today's.
+    /// Called at DayStarted. Tomorrow values were generated and saved at DayEnding.</summary>
     public void GenerateTodayValues(BankAccountData account)
     {
-        // Rotate: tomorrow's values become today's
         account.TodayRandoms = new Dictionary<string, double>(account.TomorrowRandoms);
-        // Tomorrow's bankruptcy randoms are consumed at UpdateCompanyStatuses — do NOT clear here.
-        // They were pre-generated at DayEnding and saved to disk; clearing here would regenerate
-        // them with a different RNG sequence, defeating the determinism guarantee.
-        // Regenerate only the non-bankruptcy randoms (company volatility + luck)
-        account.TomorrowRandoms.Clear();
-        var activeCompanies = account.DynamicCompanies
-            .Where(c => c.Status != CompanyStatus.Bankrupt)
-            .ToList();
-        var dynamicNames = activeCompanies.Select(c => c.CompanyName).ToHashSet();
-        foreach (var ca in account.CompanyAccounts)
-        {
-            if (dynamicNames.Contains(ca.CompanyName))
-                account.TomorrowRandoms[ca.CompanyName] = _rng.NextDouble() * 2 - 1;
-        }
-        account.TomorrowLuck = Math.Min(0.1, _rng.Next(-100, 101) / 1000.0);
     }
 
     /// <summary>Decrement restructuring days; liquidate if expired without revival.</summary>
