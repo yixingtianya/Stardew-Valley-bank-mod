@@ -1062,9 +1062,11 @@ internal class BankMenu : IClickableMenu
                     "SeedShop" => I18n.Get("mod.195"), "Blacksmith" => I18n.Get("uib.80"), "Carpenter" => I18n.Get("uib.81"),
                     "Joja" => I18n.Get("mod.191"), "IslandTrade" => I18n.Get("uib.82"), "DesertTrade" => I18n.Get("uib.83"),
                     "Sandy" => I18n.Get("uib.84"), "QiGemShop" => I18n.Get("uib.85"),
+                    "BlackMarket" => I18n.Get("uib.110"),
                     _ => sid
                 };
-                string? closed = GetShopClosedReason(sid);
+                // 黑店永远营业，不显示关闭原因
+                string? closed = sid == "BlackMarket" ? null : GetShopClosedReason(sid);
                 if (closed != null)
                     name += $" [{closed}]";
                 shopList.Add(new Response(sid, name));
@@ -1074,6 +1076,12 @@ internal class BankMenu : IClickableMenu
             {
                 if (answer != "Cancel")
                 {
+                    // 神秘黑店：跳过营业时间检查
+                    if (answer == "BlackMarket")
+                    {
+                        BlackMarketShop.Open();
+                        return;
+                    }
                     string? closed = GetShopClosedReason(answer);
                     if (closed != null)
                     {

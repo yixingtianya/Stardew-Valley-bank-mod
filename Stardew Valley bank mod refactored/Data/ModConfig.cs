@@ -136,7 +136,7 @@ public class ModConfig
     public bool EnableDeliveryFee { get; set; } = true;
     public double DeliveryFeePercentage { get; set; } = 0.05;
     public int DeliveryFeeFlat { get; set; } = 0;
-    public List<string> OnlineShopList { get; set; } = new() { "SeedShop", "Blacksmith", "Carpenter", "Joja", "IslandTrade", "DesertTrade", "Sandy", "QiGemShop" };
+    public List<string> OnlineShopList { get; set; } = new() { "SeedShop", "Blacksmith", "Carpenter", "Joja", "IslandTrade", "DesertTrade", "Sandy", "QiGemShop", "BlackMarket" };
 
     /*********
     ** 显示设置

@@ -99,8 +99,13 @@ public class EventScriptService : IEventScriptService
             : "continue/6 8/farmer 6 10 0 Pierre 6 8 2";
         string script = header + "/" + string.Join("/", cmds);
         _monitor.Log($"[EventScript] Script ({script.Length} chars)", LogLevel.Info);
+        if (Game1.currentLocation is null)
+        {
+            _monitor.Log("[EventScript] currentLocation is null, cannot start event", LogLevel.Warn);
+            return false;
+        }
         _routeService.ModEventPlaying = true;
-        Game1.currentLocation?.startEvent(new Event(script, Game1.player));
+        Game1.currentLocation.startEvent(new Event(script, Game1.player));
         return true;
     }
 }

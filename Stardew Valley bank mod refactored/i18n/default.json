@@ -932,5 +932,6 @@
   "uilog.11": "Day {day}",
   "uilog.12": "Season Total: {total}",
   "uilog.13": "{season} Year {year}",
-  "uilog.14": "No interest data for this season yet."
+  "uilog.14": "No interest data for this season yet.",
+  "uib.110": "Mysterious Black Market"
 }

@@ -11,6 +11,7 @@ using StardewModdingAPI.Events;
 using System.IO;
 using StardewValley;
 using StardewValley.GameData.Objects;
+using StardewValley.GameData.Shops;
 using StardewValley.Menus;
 
 namespace BankMod;
@@ -444,6 +445,43 @@ internal sealed class BankMod : Mod
                 {
                     Monitor.Log($"[AssetRequested] Data/mail loading: acc is null", LogLevel.Warn);
                 }
+            });
+        }
+
+        // Register BlackMarket shop in Data/Shops so setUpShopOwner can find it
+        if (e.NameWithoutLocale.IsEquivalentTo("Data/Shops"))
+        {
+            e.Edit(assets =>
+            {
+                var data = assets.AsDictionary<string, ShopData>();
+                if (!data.Data.ContainsKey("BlackMarket"))
+                {
+                    data.Data["BlackMarket"] = new ShopData
+                    {
+                        Currency = 0,
+                        Owners = new List<ShopOwnerData>
+                        {
+                            new()
+                            {
+                                Name = "AnyOrNone",
+                                Dialogues = new List<ShopDialogueData>
+                                {
+                                    new() { Id = "BankMod.BlackMarket_Dialogue", Dialogue = I18n.Get("uib.110") }
+                                }
+                            }
+                        }
+                    };
+                }
+            });
+        }
+
+        // Register BlackMarket shop name in Strings/Shops
+        if (e.NameWithoutLocale.IsEquivalentTo("Strings/Shops"))
+        {
+            e.Edit(assets =>
+            {
+                var data = assets.AsDictionary<string, string>();
+                data.Data["BlackMarket_Name"] = I18n.Get("uib.110");
             });
         }
 
@@ -1661,10 +1699,14 @@ internal sealed class BankMod : Mod
             && (_oldSavePending || _services.RouteService.CompletedRoute == "Joja"))
         {
             _oldSavePending = false;
-            _services.RouteService.MarkCutsceneSeen();
-            _services.RouteService.SaveToSave(Helper);
             string file = _services.RouteService.CompletedRoute == "Joja" ? "joja.txt" : I18n.Get("mod.175");
-            _services.EventScriptService.StartRouteEvent(file, _services.RouteService.CompletedRoute == "Joja");
+            bool started = _services.EventScriptService.StartRouteEvent(file, _services.RouteService.CompletedRoute == "Joja");
+            if (started)
+            {
+                // 事件成功启动后再标记已看过，避免启动失败后永远无法重试
+                _services.RouteService.MarkCutsceneSeen();
+                _services.RouteService.SaveToSave(Helper);
+            }
         }
 
         // Mod event ended → unlock online shopping
