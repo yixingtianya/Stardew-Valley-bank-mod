@@ -545,6 +545,10 @@ public class CompanyManager : ICompanyManager
     {
         if (account.CompanyAccounts.Count == 0) return;
 
+        // Diagnostic: log caller stack trace to diagnose triple-counting report
+        _monitor.Log($"[InterestLog] SettleDailyInterest called (DaysPlayed={Game1.stats.DaysPlayed}, Companies={account.CompanyAccounts.Count}, LogRecords={account.SeasonInterestLog.Count})", LogLevel.Info);
+        _monitor.Log($"[InterestLog] Stack trace: {Environment.StackTrace}", LogLevel.Debug);
+
         // Season interest log: reset when season changes
         string currentSeason = Game1.currentSeason;
         int currentYear = Game1.year;
@@ -612,14 +616,24 @@ public class CompanyManager : ICompanyManager
             int interest = (int)(principal * rate);
 
             // Record daily interest log (even if interest is 0, to show rate)
-            account.SeasonInterestLog.Add(new DailyInterestRecord
+            // Guard: skip if a record for this company+day already exists (prevents triple-counting)
+            bool alreadyRecorded = account.SeasonInterestLog.Any(r =>
+                r.CompanyName == ca.CompanyName && r.Day == daysPlayed);
+            if (alreadyRecorded)
             {
-                Day = daysPlayed,
-                SeasonDay = seasonDay,
-                CompanyName = ca.CompanyName,
-                Rate = rate,
-                Interest = interest
-            });
+                _monitor.Log($"[InterestLog] Duplicate record skipped: {ca.CompanyName} day={daysPlayed}", LogLevel.Warn);
+            }
+            else
+            {
+                account.SeasonInterestLog.Add(new DailyInterestRecord
+                {
+                    Day = daysPlayed,
+                    SeasonDay = seasonDay,
+                    CompanyName = ca.CompanyName,
+                    Rate = rate,
+                    Interest = interest
+                });
+            }
 
             if (rate == 0) continue;
 
@@ -849,11 +863,12 @@ public class CompanyManager : ICompanyManager
         var activeCompanies = account.DynamicCompanies
             .Where(c => c.Status != CompanyStatus.Bankrupt)
             .ToList();
-        var dynamicNames = activeCompanies.Select(c => c.CompanyName).ToHashSet();
-        foreach (var ca in account.CompanyAccounts)
+        // Iterate DynamicCompanies (not CompanyAccounts) so newly born companies
+        // that don't have a CompanyAccount yet still get pre-generated randoms
+        // for next-day FBN forecast.
+        foreach (var dc in activeCompanies)
         {
-            if (dynamicNames.Contains(ca.CompanyName))
-                account.TomorrowRandoms[ca.CompanyName] = _rng.NextDouble() * 2 - 1; // [-1, +1]
+            account.TomorrowRandoms[dc.CompanyName] = _rng.NextDouble() * 2 - 1; // [-1, +1]
         }
         // Pre-generate bankruptcy random check for each active company
         foreach (var dc in activeCompanies)
@@ -1151,6 +1166,8 @@ public class CompanyManager : ICompanyManager
             ca.DepositBalance = 0;
             ca.BaseAmount = 0;
             ca.AccumulatedInterest = 0;
+            // Remove CompanyAccount to prevent stale interest log entries across seasons
+            account.CompanyAccounts.Remove(ca);
         }
 
         company.Status = CompanyStatus.Bankrupt;

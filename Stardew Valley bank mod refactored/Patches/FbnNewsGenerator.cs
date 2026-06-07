@@ -446,6 +446,8 @@ internal static class FbnNewsGenerator
         lines.Add(I18n.Get("fbn.183"));
 
         int shown = 0;
+        // Get all company definitions (includes status multiplier: Prosperous 1.2, Stable 0.9, etc.)
+        var allDefs = _s?.CompanyManager.GetAllCompanyDefinitions(account);
         foreach (var dc in account.DynamicCompanies)
         {
             if (dc.Status == CompanyStatus.Bankrupt) continue;
@@ -453,8 +455,28 @@ internal static class FbnNewsGenerator
             shown++;
             var cd = CropDataProvider.GetByCode(dc.CropCode);
             string name = cd?.DisplayName ?? dc.CropCode;
-            // 3-tier base rate (same as actual calculation)
-            double baseRate = cd?.R > 0.20 ? cd.R * 0.5 : cd?.R > 0 ? cd.R : 0;
+
+            // Use DepositInterestRate from GetAllCompanyDefinitions (includes 3-tier + status multiplier)
+            var companyDef = allDefs?.FirstOrDefault(c => c.Name == dc.CompanyName);
+            double baseRate = companyDef?.DepositInterestRate ?? 0;
+
+            // Consecutive sell bonus/decay (same formula as GetConsecutiveAdjustment)
+            var shipment = account.CropShipments.FirstOrDefault(s => s.CropCode == dc.CropCode);
+            if (shipment != null)
+            {
+                if (shipment.ConsecutiveSellDays > 0)
+                {
+                    double bonus = Math.Min(shipment.ConsecutiveSellDays * _c.ConsecutiveSellDepositBonusPerDay,
+                        _c.ConsecutiveSellDepositBonusCap);
+                    baseRate += bonus;
+                }
+                else if (shipment.DecayDays > 0 && shipment.CumulativeSellCount > 0)
+                {
+                    double decay = Math.Min(shipment.DecayDays * _c.SellDecayDepositPerDay,
+                        _c.ConsecutiveSellDepositBonusCap);
+                    baseRate -= decay;
+                }
+            }
 
             // Luck flat additive: sign(tomorrowLuck) × coefficient / 100
             double luckFlat = _c.EnableLuckInfluence
