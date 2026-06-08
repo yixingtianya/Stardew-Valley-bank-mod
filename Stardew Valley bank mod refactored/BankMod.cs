@@ -247,9 +247,21 @@ internal sealed class BankMod : Mod
                 : companies[Random.Shared.Next(companies.Count)];
             account.FbnEventCompany = company.CompanyName;
             account.FbnEventIsReal = isReal;
-            account.FbnEventDay = Game1.dayOfMonth;
+            // FIX (#4, #9): Use DaysPlayed + update counters for consistency
+            int today = (int)Game1.stats.DaysPlayed;
+            account.FbnEventDay = today;
+            account.FbnLastEventDay = today;
             account.FbnShowOutcome = false;
-            if (isReal) account.FbnTempBoostCompany = company.CompanyName;
+            account.FbnSeason = Game1.currentSeason; // prevent season-change reset from clearing test state
+            if (isReal)
+            {
+                account.FbnTrueUsed = true;
+                account.FbnTempBoostCompany = company.CompanyName;
+            }
+            else
+            {
+                account.FbnFalseUsed++;
+            }
             _services.BankAccountService.Save(account); // Save() updates cache too
             Patches.FbnNewsGenerator.InvalidateCache();  // clear TV cache only
             Monitor.Log($"[FBN] {I18n.Get("mod.5")} {(isReal ? I18n.Get("mod.23") : I18n.Get("mod.24"))} {I18n.Get("mod.25")}: {company.CompanyName}, day={account.FbnEventDay}", LogLevel.Info);

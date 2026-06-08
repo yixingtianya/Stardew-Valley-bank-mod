@@ -1044,20 +1044,56 @@ public class CompanyManager : ICompanyManager
         var companies = account.DynamicCompanies.Where(c => c.Status != CompanyStatus.Bankrupt).ToList();
         if (companies.Count == 0) return;
 
-        int day = Game1.dayOfMonth;
+        // FIX: Use DaysPlayed (monotonically increasing) instead of dayOfMonth (1-28 cycling).
+        // This fixes: cross-season adjacency bypass, same-day reload duplication,
+        // and orphaned event state when player misses TV on season boundary.
+        int day = (int)Game1.stats.DaysPlayed;
         string season = Game1.currentSeason;
 
-        // Season change: reset quotas
+        // Season change: reset quotas + clean up orphaned FBN state
         if (account.FbnSeason != season)
         {
             account.FbnSeason = season;
             account.FbnTrueUsed = false;
             account.FbnFalseUsed = 0;
             account.FbnFalseQuota = _fbnRng.Next(2, 4); // 2-3 false
-            account.FbnLastEventDay = 0;
+            // FIX (#1): Do NOT reset FbnLastEventDay to 0.
+            // DaysPlayed is monotonically increasing, so the adjacency check
+            // (day == FbnLastEventDay + 1) naturally works across seasons.
+            // E.g. Spring Day 28 = DaysPlayed 28, Summer Day 1 = DaysPlayed 29 → adjacent.
+
+            // FIX (#3): Clean up orphaned FBN event state from previous season.
+            // If player didn't watch TV on the event day, FbnShowOutcome is false
+            // and FbnEventCompany is stale. Clear it to prevent ghost events.
+            if (!string.IsNullOrEmpty(account.FbnEventCompany) && !account.FbnShowOutcome)
+            {
+                _monitor.Log($"[FBN] Season change: clearing orphaned event '{account.FbnEventCompany}' (missed TV)", LogLevel.Warn);
+                account.FbnEventCompany = "";
+                account.FbnEventDay = 0;
+                account.FbnEventIsReal = false;
+                account.FbnTempBoostCompany = "";
+            }
+            // If player watched TV but didn't see outcome (missed next day), clean up too
+            if (account.FbnShowOutcome)
+            {
+                _monitor.Log($"[FBN] Season change: clearing stale ShowOutcome for '{account.FbnEventCompany}'", LogLevel.Warn);
+                account.FbnEventCompany = "";
+                account.FbnEventDay = 0;
+                account.FbnShowOutcome = false;
+                account.FbnTempBoostCompany = "";
+            }
         }
 
-        // Cannot be adjacent to yesterday's event
+        // Migration: old saves may have FbnFalseQuota=0 (pre-fix default).
+        // When no season change triggers a reset, false events cannot fire
+        // because remaining=1 forces isReal=true. Fix by setting a valid quota.
+        if (account.FbnFalseQuota <= 0 && !account.FbnTrueUsed)
+        {
+            account.FbnFalseQuota = _fbnRng.Next(2, 4);
+            _monitor.Log($"[FBN] Migration: FbnFalseQuota was 0, reset to {account.FbnFalseQuota}", StardewModdingAPI.LogLevel.Warn);
+        }
+
+        // Cannot be adjacent to yesterday's event (DaysPlayed-based, works cross-season)
         if (account.FbnLastEventDay > 0 && day == account.FbnLastEventDay + 1) return;
 
         // Random trigger: ~15% chance per day if quota remains

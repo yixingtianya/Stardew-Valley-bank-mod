@@ -10,6 +10,7 @@
     <EnableModZip>true</EnableModZip>
     <ModFolderName>DynamicFinancialSystem</ModFolderName>
     <ModDllName>DynamicFinancialSystem.dll</ModDllName>
+    <DefaultItemExcludes>$(DefaultItemExcludes);Tests\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>

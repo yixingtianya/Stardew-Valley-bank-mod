@@ -93,8 +93,12 @@ internal static class FbnNewsGenerator
     // ====== B2: FBN 真假消息 ======
     private static bool TryFbnEventNews(List<string> lines, BankAccountData account)
     {
+        // FIX (#3): Use DaysPlayed instead of dayOfMonth for cross-season correctness.
+        // dayOfMonth cycles 1-28 across seasons; DaysPlayed is monotonically increasing.
+        int today = (int)Game1.stats.DaysPlayed;
+
         // Day of event: show crisis news from TV2.txt (both real and fake)
-        if (!string.IsNullOrEmpty(account.FbnEventCompany) && account.FbnEventDay == Game1.dayOfMonth && !account.FbnShowOutcome)
+        if (!string.IsNullOrEmpty(account.FbnEventCompany) && account.FbnEventDay == today && !account.FbnShowOutcome)
         {
             string text = ReadTv2Section("TV2.txt", account.FbnEventCompany);
             if (!string.IsNullOrEmpty(text))
@@ -118,10 +122,16 @@ internal static class FbnNewsGenerator
                 account.FbnShowOutcome = true; // always show outcome tomorrow
                 return true;
             }
+            // FIX (#11): TV2.txt section missing — log warning, still set outcome
+            // so the state machine doesn't get stuck.
+            _s?.Monitor.Log($"[FBN] TV2.txt section not found for '{account.FbnEventCompany}', skipping crisis text", StardewModdingAPI.LogLevel.Warn);
+            account.FbnShowOutcome = true;
+            return true;
         }
 
         // Day after event: show outcome (both real and fake show 活 unless company actually died)
-        if (account.FbnShowOutcome && Game1.dayOfMonth != account.FbnEventDay)
+        // FIX (#12): Also guard against empty FbnEventCompany (data corruption edge case)
+        if (account.FbnShowOutcome && today != account.FbnEventDay && !string.IsNullOrEmpty(account.FbnEventCompany))
         {
             bool died = !account.DynamicCompanies.Any(c =>
                 c.CompanyName == account.FbnEventCompany && c.Status != CompanyStatus.Bankrupt);
@@ -144,7 +154,26 @@ internal static class FbnNewsGenerator
             }
             account.FbnEventCompany = "";
             account.FbnShowOutcome = false;
+            account.FbnEventDay = 0;
             return true;
+        }
+
+        // FIX (#3): Cleanup orphaned state — if FbnEventCompany is set but both
+        // crisis and outcome conditions failed, clear it to prevent ghost events.
+        // Case A: watched crisis but never saw outcome
+        if (!string.IsNullOrEmpty(account.FbnEventCompany) && account.FbnShowOutcome)
+        {
+            account.FbnEventCompany = "";
+            account.FbnShowOutcome = false;
+            account.FbnEventDay = 0;
+        }
+        // Case B: never watched TV at all (ShowOutcome still false, but EventDay is in the past)
+        if (!string.IsNullOrEmpty(account.FbnEventCompany) && !account.FbnShowOutcome
+            && account.FbnEventDay > 0 && account.FbnEventDay < today)
+        {
+            account.FbnEventCompany = "";
+            account.FbnEventDay = 0;
+            account.FbnEventIsReal = false;
         }
 
         return false;

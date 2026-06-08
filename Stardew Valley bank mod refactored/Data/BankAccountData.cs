@@ -54,7 +54,7 @@ public class BankAccountData
     public int FbnLastEventDay { get; set; }
     public bool FbnTrueUsed { get; set; }
     public int FbnFalseUsed { get; set; }
-    public int FbnFalseQuota { get; set; }
+    public int FbnFalseQuota { get; set; } = 3;
     public string FbnTempBoostCompany { get; set; } = "";
     public string FbnEventCompany { get; set; } = "";
     public bool FbnEventIsReal { get; set; }
